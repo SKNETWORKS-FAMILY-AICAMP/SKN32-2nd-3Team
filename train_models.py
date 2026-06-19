@@ -689,6 +689,10 @@ if ott_df is not None:
             top10_risk_test = test_df.head(10)
             actual_churn_in_top10_test = top10_risk_test['churn'].sum()
             precision_at_10_test = actual_churn_in_top10_test / 10
+            
+            # 고위험군 식별 (확률 > 0.7)
+            high_risk_test = test_df[test_df['churn_prob'] > 0.7]
+            high_risk_precision = high_risk_test['churn'].sum() / len(high_risk_test) if len(high_risk_test) > 0 else 0.0
         
         # CV는 원본 학습 데이터 사용 (SMOTE 제외)
         try:
@@ -703,10 +707,11 @@ if ott_df is not None:
             '정확도_Test': acc_test, '정밀도_Test': prec_test, '재현율_Test': rec_test,
             'F1 점수_Test': f1_test, 'AUC-ROC_Test': auc_test,
             'Precision@10_Val': precision_at_10_val, 'Precision@10_Test': precision_at_10_test,
+            '고위험군_Precision_Test': high_risk_precision,
             'CV F1 평균': cv_scores.mean(), 'CV F1 표준편차': cv_scores.std()
         }
         
-        print(f"  ✅ {name}: Val F1={f1_val:.4f}, Test F1={f1_test:.4f}, Val Precision@10={precision_at_10_val:.2f}, Test Precision@10={precision_at_10_test:.2f}")
+        print(f"  ✅ {name}: Val F1={f1_val:.4f}, Test F1={f1_test:.4f}, Val Precision@10={precision_at_10_val:.2f}, Test Precision@10={precision_at_10_test:.2f}, 고위험군 Precision={high_risk_precision:.2f}")
         
         # 99% 목표 달성 확인
         if f1_test >= 0.99:
@@ -768,16 +773,21 @@ if ott_df is not None:
     actual_churn_in_top10_test = top10_risk_test['churn'].sum()
     precision_at_10_dl_test = actual_churn_in_top10_test / 10
     
+    # 고위험군 식별 (확률 > 0.7)
+    high_risk_test = test_df[test_df['churn_prob'] > 0.7]
+    high_risk_precision_dl = high_risk_test['churn'].sum() / len(high_risk_test) if len(high_risk_test) > 0 else 0.0
+    
     model_results['OTT']['DeepLearning_Transfer'] = {
         '정확도_Val': dl_acc_val, '정밀도_Val': dl_prec_val, '재현율_Val': dl_rec_val,
         'F1 점수_Val': dl_f1_val, 'AUC-ROC_Val': dl_auc_val,
         '정확도_Test': dl_acc_test, '정밀도_Test': dl_prec_test, '재현율_Test': dl_rec_test,
         'F1 점수_Test': dl_f1_test, 'AUC-ROC_Test': dl_auc_test,
         'Precision@10_Val': precision_at_10_dl_val, 'Precision@10_Test': precision_at_10_dl_test,
+        '고위험군_Precision_Test': high_risk_precision_dl,
         'CV F1 평균': dl_f1_test, 'CV F1 표준편차': 0.0
     }
     
-    print(f"  ✅ 딥러닝 전이학습: Val F1={dl_f1_val:.4f}, Test F1={dl_f1_test:.4f}, Val Precision@10={precision_at_10_dl_val:.2f}, Test Precision@10={precision_at_10_dl_test:.2f}")
+    print(f"  ✅ 딥러닝 전이학습: Val F1={dl_f1_val:.4f}, Test F1={dl_f1_test:.4f}, Val Precision@10={precision_at_10_dl_val:.2f}, Test Precision@10={precision_at_10_dl_test:.2f}, 고위험군 Precision={high_risk_precision_dl:.2f}")
     
     if dl_f1_test >= 0.99:
         print(f"  🎉 99% 목표 달성! F1: {dl_f1_test:.4f}")
@@ -785,6 +795,17 @@ if ott_df is not None:
     # 최적 모델 저장
     ott_best_model_name = max(model_results['OTT'], key=lambda x: model_results['OTT'][x]['F1 점수_Test'])
     print(f"  🏆 OTT 최적 모델: {ott_best_model_name} (Test F1: {model_results['OTT'][ott_best_model_name]['F1 점수_Test']:.4f})")
+    
+    # OTT 최적 모델로 TOP10 추출 및 저장
+    ott_best_model = ott_models_to_train[ott_best_model_name]
+    ott_best_probs = ott_best_model.predict_proba(X_ott_test_proc)[:, 1]
+    ott_test_indices = X_ott_test.index if hasattr(X_ott_test, 'index') else range(len(ott_best_probs))
+    ott_test_df = ott_df.iloc[ott_test_indices].copy()
+    ott_test_df['churn_prob'] = ott_best_probs
+    ott_test_df = ott_test_df.sort_values('churn_prob', ascending=False)
+    ott_top10 = ott_test_df.head(10)
+    ott_top10.to_csv(os.path.join(BASE_DIR, 'assets', 'ott_top10_customers.csv'), index=False, encoding='utf-8-sig')
+    print(f"  📊 OTT TOP10 고객 저장 완료: assets/ott_top10_customers.csv")
 else:
     print("  ⚠️ OTT 데이터 없음, 건너뜀")
 
@@ -869,6 +890,10 @@ if sns_df is not None:
             top10_risk_test = test_df.head(10)
             actual_churn_in_top10_test = top10_risk_test['churn'].sum()
             precision_at_10_test = actual_churn_in_top10_test / 10
+            
+            # 고위험군 식별 (확률 > 0.7)
+            high_risk_test = test_df[test_df['churn_prob'] > 0.7]
+            high_risk_precision = high_risk_test['churn'].sum() / len(high_risk_test) if len(high_risk_test) > 0 else 0.0
         
         # CV는 원본 학습 데이터 사용 (SMOTE 제외)
         try:
@@ -883,10 +908,11 @@ if sns_df is not None:
             '정확도_Test': acc_test, '정밀도_Test': prec_test, '재현율_Test': rec_test,
             'F1 점수_Test': f1_test, 'AUC-ROC_Test': auc_test,
             'Precision@10_Val': precision_at_10_val, 'Precision@10_Test': precision_at_10_test,
+            '고위험군_Precision_Test': high_risk_precision,
             'CV F1 평균': cv_scores.mean(), 'CV F1 표준편차': cv_scores.std()
         }
         
-        print(f"  ✅ {name}: Val F1={f1_val:.4f}, Test F1={f1_test:.4f}, Val Precision@10={precision_at_10_val:.2f}, Test Precision@10={precision_at_10_test:.2f}")
+        print(f"  ✅ {name}: Val F1={f1_val:.4f}, Test F1={f1_test:.4f}, Val Precision@10={precision_at_10_val:.2f}, Test Precision@10={precision_at_10_test:.2f}, 고위험군 Precision={high_risk_precision:.2f}")
         
         if f1_test >= 0.99:
             print(f"  🎉 99% 목표 달성! F1: {f1_test:.4f}")
@@ -947,16 +973,21 @@ if sns_df is not None:
     actual_churn_in_top10_test = top10_risk_test['churn'].sum()
     precision_at_10_dl_test = actual_churn_in_top10_test / 10
     
+    # 고위험군 식별 (확률 > 0.7)
+    high_risk_test = test_df[test_df['churn_prob'] > 0.7]
+    high_risk_precision_dl = high_risk_test['churn'].sum() / len(high_risk_test) if len(high_risk_test) > 0 else 0.0
+    
     model_results['SNS']['DeepLearning_Transfer'] = {
         '정확도_Val': dl_acc_val, '정밀도_Val': dl_prec_val, '재현율_Val': dl_rec_val,
         'F1 점수_Val': dl_f1_val, 'AUC-ROC_Val': dl_auc_val,
         '정확도_Test': dl_acc_test, '정밀도_Test': dl_prec_test, '재현율_Test': dl_rec_test,
         'F1 점수_Test': dl_f1_test, 'AUC-ROC_Test': dl_auc_test,
         'Precision@10_Val': precision_at_10_dl_val, 'Precision@10_Test': precision_at_10_dl_test,
+        '고위험군_Precision_Test': high_risk_precision_dl,
         'CV F1 평균': dl_f1_test, 'CV F1 표준편차': 0.0
     }
     
-    print(f"  ✅ 딥러닝 전이학습: Val F1={dl_f1_val:.4f}, Test F1={dl_f1_test:.4f}, Val Precision@10={precision_at_10_dl_val:.2f}, Test Precision@10={precision_at_10_dl_test:.2f}")
+    print(f"  ✅ 딥러닝 전이학습: Val F1={dl_f1_val:.4f}, Test F1={dl_f1_test:.4f}, Val Precision@10={precision_at_10_dl_val:.2f}, Test Precision@10={precision_at_10_dl_test:.2f}, 고위험군 Precision={high_risk_precision_dl:.2f}")
     
     if dl_f1_test >= 0.99:
         print(f"  🎉 99% 목표 달성! F1: {dl_f1_test:.4f}")
@@ -964,6 +995,17 @@ if sns_df is not None:
     # 최적 모델 저장
     sns_best_model_name = max(model_results['SNS'], key=lambda x: model_results['SNS'][x]['F1 점수_Test'])
     print(f"  🏆 SNS 최적 모델: {sns_best_model_name} (Test F1: {model_results['SNS'][sns_best_model_name]['F1 점수_Test']:.4f})")
+    
+    # SNS 최적 모델로 TOP10 추출 및 저장
+    sns_best_model = sns_models_to_train[sns_best_model_name]
+    sns_best_probs = sns_best_model.predict_proba(X_sns_test_proc)[:, 1]
+    sns_test_indices = X_sns_test.index if hasattr(X_sns_test, 'index') else range(len(sns_best_probs))
+    sns_test_df = sns_df.iloc[sns_test_indices].copy()
+    sns_test_df['churn_prob'] = sns_best_probs
+    sns_test_df = sns_test_df.sort_values('churn_prob', ascending=False)
+    sns_top10 = sns_test_df.head(10)
+    sns_top10.to_csv(os.path.join(BASE_DIR, 'assets', 'sns_top10_customers.csv'), index=False, encoding='utf-8-sig')
+    print(f"  📊 SNS TOP10 고객 저장 완료: assets/sns_top10_customers.csv")
 else:
     print("  ⚠️ SNS 데이터 없음, 건너뜀")
 
@@ -1105,6 +1147,27 @@ for task_name, task_title in zip(task_names, task_titles):
             print(f"  ⚠️ 99% 목표까지 {gap:.4f} 부족")
     else:
         print("  ⚠️ 결과 없음")
+
+# ─── 요약 보고서 ─────────────────────────────────────────────────────────────
+print("\n" + "=" * 60)
+print("📋 요약 보고서")
+print("=" * 60)
+
+if 'OTT' in model_results and len(model_results['OTT']) > 0:
+    ott_best = max(model_results['OTT'], key=lambda x: model_results['OTT'][x]['F1 점수_Test'])
+    ott_f1 = model_results['OTT'][ott_best]['F1 점수_Test']
+    ott_precision = model_results['OTT'][ott_best]['Precision@10_Test']
+    print(f"\nOTT")
+    print(f"실제로 한 번도 보지 못한 테스트 데이터에서 이탈 고객 예측 성능(F1) {ott_f1:.1%}를 기록")
+    print(f"모델이 위험하다고 판단한 상위 10명 중 {int(ott_precision * 10)}명이 실제 이탈 고객으로 확인됨.")
+
+if 'SNS' in model_results and len(model_results['SNS']) > 0:
+    sns_best = max(model_results['SNS'], key=lambda x: model_results['SNS'][x]['F1 점수_Test'])
+    sns_f1 = model_results['SNS'][sns_best]['F1 점수_Test']
+    sns_precision = model_results['SNS'][sns_best]['Precision@10_Test']
+    print(f"\nSNS")
+    print(f"실제로 한 번도 보지 못한 테스트 데이터에서 이탈 고객 예측 성능(F1) {sns_f1:.1%}를 기록")
+    print(f"모델이 위험하다고 판단한 상위 10명 중 {int(sns_precision * 10)}명이 실제 이탈 고객으로 확인")
 
 print("\n" + "=" * 60)
 print("OTT/SNS 2가지 예측 모델 학습 완료!")
