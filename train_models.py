@@ -38,9 +38,13 @@ for f in fm.findSystemFonts():
         break
 plt.rcParams['axes.unicode_minus'] = False
 
+# Get project root directory
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ─── 데이터 로드 ──────────────────────────────────────────────────────────────
 X_train, X_test, y_train, y_test = joblib.load(
-    'D:/Personal/P-PJT/Team-PJT_/churn_project/models/train_test_split.pkl'
+    os.path.join(BASE_DIR, 'models', 'train_test_split.pkl')
 )
 print(f"학습 데이터: {X_train.shape}, 테스트 데이터: {X_test.shape}")
 
@@ -159,24 +163,24 @@ print(f"\n최적 모델: {best_model_name} (AUC-ROC: {results_df.loc[best_model_
 
 # 최적 모델 저장
 if best_model_name == '딥러닝 (MLP)':
-    dl_model.save('D:/Personal/P-PJT/Team-PJT_/churn_project/models/best_model_dl.keras')
-    joblib.dump({'type': 'dl', 'name': best_model_name}, 'D:/Personal/P-PJT/Team-PJT_/churn_project/models/best_model_info.pkl')
+    dl_model.save(os.path.join(BASE_DIR, 'models', 'best_model_dl.keras'))
+    joblib.dump({'type': 'dl', 'name': best_model_name}, os.path.join(BASE_DIR, 'models', 'best_model_info.pkl'))
 else:
     best_model = models[best_model_name]
-    joblib.dump(best_model, 'D:/Personal/P-PJT/Team-PJT_/churn_project/models/best_model.pkl')
-    joblib.dump({'type': 'ml', 'name': best_model_name}, 'D:/Personal/P-PJT/Team-PJT_/churn_project/models/best_model_info.pkl')
+    joblib.dump(best_model, os.path.join(BASE_DIR, 'models', 'best_model.pkl'))
+    joblib.dump({'type': 'ml', 'name': best_model_name}, os.path.join(BASE_DIR, 'models', 'best_model_info.pkl'))
 
 # 모든 ML 모델 저장
 for name, model in models.items():
     safe_name = name.replace(' ', '_').replace('(', '').replace(')', '')
-    joblib.dump(model, f'D:/Personal/P-PJT/Team-PJT_/churn_project/models/model_{safe_name}.pkl')
+    joblib.dump(model, os.path.join(BASE_DIR, 'models', f'model_{safe_name}.pkl'))
 
 # 딥러닝 모델 저장
-dl_model.save('D:/Personal/P-PJT/Team-PJT_/churn_project/models/model_DL_MLP.keras')
+dl_model.save(os.path.join(BASE_DIR, 'models', 'model_DL_MLP.keras'))
 
 # 결과 저장
-results_df.to_csv('D:/Personal/P-PJT/Team-PJT_/churn_project/data/model_results.csv', encoding='utf-8-sig')
-with open('D:/Personal/P-PJT/Team-PJT_/churn_project/data/model_results.json', 'w', encoding='utf-8') as f:
+results_df.to_csv(os.path.join(BASE_DIR, 'data', 'model_results.csv'), encoding='utf-8-sig')
+with open(os.path.join(BASE_DIR, 'data', 'model_results.json'), 'w', encoding='utf-8') as f:
     json.dump(results, f, ensure_ascii=False, indent=2)
 
 # ─── 시각화 ──────────────────────────────────────────────────────────────────
@@ -249,13 +253,13 @@ ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=8)
 ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('D:/Personal/P-PJT/Team-PJT_/churn_project/assets/model_results.png', dpi=150, bbox_inches='tight',
+plt.savefig(os.path.join(BASE_DIR, 'assets', 'model_results.png'), dpi=150, bbox_inches='tight',
             facecolor='white')
 plt.close()
 print("\n모델 결과 시각화 저장: assets/model_results.png")
 
 # ─── 특성 중요도 (최적 ML 모델) ───────────────────────────────────────────────
-feature_cols = joblib.load('D:/Personal/P-PJT/Team-PJT_/churn_project/models/feature_cols.pkl')
+feature_cols = joblib.load(os.path.join(BASE_DIR, 'models', 'feature_cols.pkl'))
 best_ml_name = results_df[results_df.index != '딥러닝 (MLP)']['AUC-ROC'].idxmax()
 best_ml_model = models[best_ml_name]
 
@@ -272,7 +276,7 @@ if hasattr(best_ml_model, 'feature_importances_'):
         ax.text(bar.get_width() + 0.001, bar.get_y() + bar.get_height()/2,
                 f'{val:.4f}', va='center', fontsize=9)
     plt.tight_layout()
-    plt.savefig('D:/Personal/P-PJT/Team-PJT_/churn_project/assets/feature_importance.png', dpi=150,
+    plt.savefig(os.path.join(BASE_DIR, 'assets', 'feature_importance.png'), dpi=150,
                 bbox_inches='tight', facecolor='white')
     plt.close()
     print("특성 중요도 저장: assets/feature_importance.png")

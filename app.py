@@ -20,7 +20,9 @@ warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
 import time
 
-sys.path.insert(0, 'D:/Personal/P-PJT/Team-PJT_/churn_project')
+# Get project root directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
 
 # ─── 페이지 설정 ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -169,7 +171,7 @@ st.markdown("""
 # ─── 데이터 및 모델 로드 ──────────────────────────────────────────────────────
 @st.cache_data
 def load_data():
-    df = pd.read_csv('D:/Personal/P-PJT/Team-PJT_/data/korea_telecom_churn.csv', encoding='utf-8-sig')
+    df = pd.read_csv(os.path.join(BASE_DIR, 'data', 'korea_telecom_churn.csv'), encoding='utf-8-sig')
     # OTT 데이터 컬럼명에 맞춰 수정
     if '월시청시간' in df.columns:
         df['월시청시간'].fillna(df['월시청시간'].median(), inplace=True)
@@ -186,11 +188,11 @@ def load_data():
 
 @st.cache_resource
 def load_models():
-    scaler = joblib.load('D:/Personal/P-PJT/Team-PJT_/models/scaler.pkl')
-    le_dict = joblib.load('D:/Personal/P-PJT/Team-PJT_/models/label_encoders.pkl')
-    feature_cols = joblib.load('D:/Personal/P-PJT/Team-PJT_/models/feature_cols.pkl')
-    best_model = joblib.load('D:/Personal/P-PJT/Team-PJT_/models/best_model.pkl')
-    with open('D:/Personal/P-PJT/Team-PJT_/data/model_results.json', 'r', encoding='utf-8') as f:
+    scaler = joblib.load(os.path.join(BASE_DIR, 'models', 'scaler.pkl'))
+    le_dict = joblib.load(os.path.join(BASE_DIR, 'models', 'label_encoders.pkl'))
+    feature_cols = joblib.load(os.path.join(BASE_DIR, 'models', 'feature_cols.pkl'))
+    best_model = joblib.load(os.path.join(BASE_DIR, 'models', 'best_model.pkl'))
+    with open(os.path.join(BASE_DIR, 'data', 'model_results.json'), 'r', encoding='utf-8') as f:
         model_results = json.load(f)
     return scaler, le_dict, feature_cols, best_model, model_results
 
