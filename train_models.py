@@ -56,16 +56,18 @@ def load_ott_sns_data():
     print("OTT/SNS 데이터 로드")
     print("=" * 60)
     
-    # OTT 데이터 로드
+    # OTT 데이터 로드 (ott_data_v.2 폴더에서)
     try:
-        ott_money = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_money.csv'))
-        ott_time = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_time.csv'))
-        ott_usage_01 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_usage_01.csv'))
-        ott_usage_02 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_usage_02.csv'))
-        print(f"✅ OTT 데이터 로드 완료")
+        ott_money = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_data_v.2', 'ott_money.csv'))
+        ott_time = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_data_v.2', 'ott_time.csv'))
+        ott_usage = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_data_v.2', 'ott_usage.csv'))
+        print(f"✅ OTT 데이터 로드 완료 (ott_data_v.2)")
     except Exception as e:
         print(f"❌ OTT 데이터 로드 실패: {e}")
         return None, None
+    
+    # OTT 데이터 전처리
+    ott_df = preprocess_ott_data(ott_money, ott_time, ott_usage)
     
     # SNS 데이터 로드
     try:
@@ -74,98 +76,107 @@ def load_ott_sns_data():
         sns_usage_02 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'sns_usage_02.csv'))
         sns_usage_03 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'sns_usage_03.csv'))
         print(f"✅ SNS 데이터 로드 완료")
+        
+        # SNS 데이터 전처리
+        sns_df = preprocess_sns_data(sns_time, sns_usage_01, sns_usage_02, sns_usage_03)
     except Exception as e:
         print(f"❌ SNS 데이터 로드 실패: {e}")
-        return None, None
-    
-    # OTT 데이터 전처리
-    ott_df = preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02)
-    
-    # SNS 데이터 전처리
-    sns_df = preprocess_sns_data(sns_time, sns_usage_01, sns_usage_02, sns_usage_03)
+        print("⚠️ OTT 데이터만 사용하여 진행합니다.")
+        sns_df = None
     
     return ott_df, sns_df
 
-def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
-    """OTT 데이터 전처리 및 특성 추출"""
+def preprocess_ott_data(ott_money, ott_time, ott_usage):
+    """OTT 데이터 전처리 및 특성 추출 (ott_data_v.2 구조) - 시간 기반 분리 지원"""
     print("📊 OTT 데이터 전처리 중...")
     
-    # ott_money: pid별 비용 데이터
-    money_dict = dict(zip(ott_money['pid'], ott_money['p21d26058']))
+    # 연도별 데이터 집계 (시간 기반 분리를 위해)
+    yearly_features = []
     
-    # ott_time: 연도별 사용자 시계열 데이터
-    time_data = ott_time.set_index('YEAR')
+    # 비용 데이터 사전화 (범주형 -> 수치형 변환)
+    cost_mapping = {
+        '': 0,
+        '1만원 미만': 5000,
+        '1만원 - 1만 5천원 미만': 12500,
+        '1만 5천원 - 2만원 미만': 17500,
+        '2만원 - 2만 5천원 미만': 22500,
+        '2만 5천원 - 3만원 미만': 27500,
+        '3만원 이상': 35000
+    }
     
-    # ott_usage: 연도별 사용 패턴 데이터
-    usage_01_data = ott_usage_01.set_index('YEAR')
-    usage_02_data = ott_usage_02.set_index('YEAR')
+    # OTT 서비스별 가중치
+    service_weights = {
+        '넷플릭스': 1.5,
+        '유튜브': 1.0,
+        '티빙(Tving)': 1.2,
+        '네이버 시리즈온(SERIES)': 1.1,
+        '카카오 TV': 1.0,
+        '시즌(KT Seezn)(구 olleh tv 모바일)': 1.1,
+        '': 0.0
+    }
     
-    # 사용자별 특성 추출
-    user_features = []
-    
-    # 모든 사용자 ID 추출
-    all_users = set()
-    for col in time_data.columns:
-        if col != 'YEAR':
-            all_users.add(col)
-    
-    for user_id in list(all_users)[:1000]:  # 샘플링 (메모리 관리)
-        features = {'user_id': user_id}
+    # 연도별로 데이터 처리 (시간 기반 분리를 위해)
+    for year in sorted(ott_time['YEAR'].unique()):
+        year_money = ott_money[ott_money['YEAR'] == year]
+        year_time = ott_time[ott_time['YEAR'] == year]
+        year_usage = ott_usage[ott_usage['YEAR'] == year]
         
-        # 비용 정보
-        features['ott_money'] = money_dict.get(user_id, 0)
+        # 해당 연도의 모든 사용자 ID 추출
+        year_users = set(year_money['OPID'].unique()) | set(year_time['OPID'].unique()) | set(year_usage['OPID'].unique())
         
-        # 시계열 특성 (ott_time)
-        if user_id in time_data.columns:
-            user_time = time_data[user_id].dropna()
+        for user_id in list(year_users)[:1000]:  # 연도별 샘플링
+            features = {'user_id': user_id, 'YEAR': year}
+            
+            # 비용 정보 (해당 연도만)
+            user_money = year_money[year_money['OPID'] == user_id]
+            if len(user_money) > 0:
+                cost = user_money.iloc[0]['svod']
+                features['ott_cost'] = cost_mapping.get(cost, 0)
+            else:
+                features['ott_cost'] = 0
+            
+            # 시간 정보 (해당 연도만 - 미래 정보 제거)
+            user_time = year_time[year_time['OPID'] == user_id]
             if len(user_time) > 0:
-                features['ott_time_mean'] = user_time.mean()
-                features['ott_time_std'] = user_time.std()
-                features['ott_time_trend'] = user_time.iloc[-1] - user_time.iloc[0] if len(user_time) > 1 else 0
-                features['ott_time_max'] = user_time.max()
-                features['ott_time_min'] = user_time.min()
+                user_time['Weekday usage'] = pd.to_numeric(user_time['Weekday usage'], errors='coerce').fillna(0)
+                user_time['Weekend usage'] = pd.to_numeric(user_time['Weekend usage'], errors='coerce').fillna(0)
+                
+                features['ott_weekday_usage'] = user_time['Weekday usage'].iloc[0] if len(user_time) > 0 else 0
+                features['ott_weekend_usage'] = user_time['Weekend usage'].iloc[0] if len(user_time) > 0 else 0
+                features['ott_total_usage'] = features['ott_weekday_usage'] + features['ott_weekend_usage']
             else:
-                features.update({'ott_time_mean': 0, 'ott_time_std': 0, 'ott_time_trend': 0, 
-                               'ott_time_max': 0, 'ott_time_min': 0})
-        else:
-            features.update({'ott_time_mean': 0, 'ott_time_std': 0, 'ott_time_trend': 0, 
-                           'ott_time_max': 0, 'ott_time_min': 0})
-        
-        # 사용 패턴 특성 (ott_usage)
-        if user_id in usage_01_data.columns:
-            user_usage_01 = usage_01_data[user_id].dropna()
-            if len(user_usage_01) > 0:
-                features['ott_usage_01_mean'] = user_usage_01.mean()
-                features['ott_usage_01_std'] = user_usage_01.std()
-                features['ott_usage_01_trend'] = user_usage_01.iloc[-1] - user_usage_01.iloc[0] if len(user_usage_01) > 1 else 0
+                features.update({
+                    'ott_weekday_usage': 0, 'ott_weekend_usage': 0, 'ott_total_usage': 0
+                })
+            
+            # 사용 패턴 정보 (해당 연도만 - 미래 정보 제거)
+            user_usage = year_usage[year_usage['OPID'] == user_id]
+            if len(user_usage) > 0:
+                first_svc = user_usage.iloc[0]['ott_first'] if len(user_usage) > 0 else ''
+                second_svc = user_usage.iloc[0]['ott_second'] if len(user_usage) > 0 else ''
+                
+                features['ott_service_score'] = service_weights.get(first_svc, 0) + service_weights.get(second_svc, 0)
+                features['ott_service_count'] = (1 if first_svc else 0) + (1 if second_svc else 0)
             else:
-                features.update({'ott_usage_01_mean': 0, 'ott_usage_01_std': 0, 'ott_usage_01_trend': 0})
-        else:
-            features.update({'ott_usage_01_mean': 0, 'ott_usage_01_std': 0, 'ott_usage_01_trend': 0})
-        
-        if user_id in usage_02_data.columns:
-            user_usage_02 = usage_02_data[user_id].dropna()
-            if len(user_usage_02) > 0:
-                features['ott_usage_02_mean'] = user_usage_02.mean()
-                features['ott_usage_02_std'] = user_usage_02.std()
-                features['ott_usage_02_trend'] = user_usage_02.iloc[-1] - user_usage_02.iloc[0] if len(user_usage_02) > 1 else 0
+                features.update({
+                    'ott_service_score': 0, 'ott_service_count': 0
+                })
+            
+            # 이탈 라벨 생성 (다음 연도 데이터가 없으면 이탈로 정의)
+            next_year = year + 1
+            next_year_data = ott_time[ott_time['YEAR'] == next_year]
+            if len(next_year_data) > 0 and user_id in next_year_data['OPID'].values:
+                features['churn'] = 0  # 다음 연도에도 존재하면 이탈 아님
             else:
-                features.update({'ott_usage_02_mean': 0, 'ott_usage_02_std': 0, 'ott_usage_02_trend': 0})
-        else:
-            features.update({'ott_usage_02_mean': 0, 'ott_usage_02_std': 0, 'ott_usage_02_trend': 0})
-        
-        # 이탈 라벨 생성 (데이터 누수 방지를 위해 다른 기준 사용)
-        # 전체 사용 시간이 낮고 감소하는 경우를 이탈로 정의
-        total_time = features.get('ott_time_mean', 0) + features.get('ott_usage_01_mean', 0)
-        if total_time < 10 and features.get('ott_time_trend', 0) < 0:
-            features['churn'] = 1
-        else:
-            features['churn'] = 0
-        
-        user_features.append(features)
+                features['churn'] = 1  # 다음 연도에 없으면 이탈
+            
+            yearly_features.append(features)
     
-    ott_df = pd.DataFrame(user_features)
+    ott_df = pd.DataFrame(yearly_features)
     print(f"✅ OTT 데이터 전처리 완료: {ott_df.shape}")
+    print(f"📊 연도별 데이터 분포:")
+    print(ott_df.groupby('YEAR').size())
+    print(f"📊 전체 이탈률: {ott_df['churn'].mean():.2%}")
     return ott_df
 
 def preprocess_sns_data(sns_time, sns_usage_01, sns_usage_02, sns_usage_03):
@@ -276,8 +287,8 @@ else:
     print("OTT 데이터로 모델 학습 준비")
     print("=" * 60)
 
-    # 특성 선택 (데이터 누수 방지를 위해 trend 특성 제거)
-    ott_features = [col for col in ott_df.columns if col not in ['user_id', 'churn'] and 'trend' not in col]
+    # 특성 선택 (데이터 누수 방지를 위해 YEAR, user_id, churn, trend 특성 제거)
+    ott_features = [col for col in ott_df.columns if col not in ['user_id', 'churn', 'YEAR'] and 'trend' not in col]
     X_ott = ott_df[ott_features].fillna(0)
     y_ott = ott_df['churn']
 
@@ -291,23 +302,37 @@ else:
     # X_sns = sns_df[sns_features].fillna(0)
     # y_sns = sns_df['churn']
     
-    # OTT 데이터 분할 (Train 60%, Validation 20%, Test 20%)
-    try:
-        X_ott_temp, X_ott_test, y_ott_temp, y_ott_test = train_test_split(
-            X_ott, y_ott, test_size=0.2, random_state=42, stratify=y_ott
-        )
-        X_ott_train, X_ott_val, y_ott_train, y_ott_val = train_test_split(
-            X_ott_temp, y_ott_temp, test_size=0.25, random_state=42, stratify=y_ott_temp
-        )
-    except ValueError as e:
-        print(f"⚠️ OTT stratified split 실패: {e}")
-        print("  일반 split로 대체...")
-        X_ott_temp, X_ott_test, y_ott_temp, y_ott_test = train_test_split(
-            X_ott, y_ott, test_size=0.2, random_state=42
-        )
-        X_ott_train, X_ott_val, y_ott_train, y_ott_val = train_test_split(
-            X_ott_temp, y_ott_temp, test_size=0.25, random_state=42
-        )
+    # OTT 데이터 분할 (시간 기반 분리 - 데이터 누수 방지)
+    # 연도 정보를 기준으로 분리: Train (초기 연도), Validation (중간 연도), Test (최신 연도)
+    years = sorted(ott_df['YEAR'].unique())
+    if len(years) >= 3:
+        train_years = years[:-2]
+        val_years = [years[-2]]
+        test_years = [years[-1]]
+    elif len(years) == 2:
+        train_years = [years[0]]
+        val_years = [years[0]]
+        test_years = [years[1]]
+    else:
+        train_years = years
+        val_years = years
+        test_years = years
+    
+    train_mask = ott_df['YEAR'].isin(train_years)
+    val_mask = ott_df['YEAR'].isin(val_years)
+    test_mask = ott_df['YEAR'].isin(test_years)
+    
+    X_ott_train = X_ott[train_mask]
+    X_ott_val = X_ott[val_mask]
+    X_ott_test = X_ott[test_mask]
+    y_ott_train = y_ott[train_mask]
+    y_ott_val = y_ott[val_mask]
+    y_ott_test = y_ott[test_mask]
+    
+    print(f"📅 시간 기반 분리:")
+    print(f"  Train 연도: {train_years}")
+    print(f"  Validation 연도: {val_years}")
+    print(f"  Test 연도: {test_years}")
     
     # SNS 데이터 분할 (주석 처리)
     # try:
@@ -373,7 +398,7 @@ if ott_df is not None:
     X_ott_train_proc, X_ott_val_proc, X_ott_test_proc, ott_features, ott_scaler, ott_selector = preprocess_data(X_ott_train, X_ott_val, X_ott_test, y_ott_train)
     # X_sns_train_proc, X_sns_val_proc, X_sns_test_proc, sns_features, sns_scaler, sns_selector = preprocess_data(X_sns_train, X_sns_val, X_sns_test, y_sns_train)
     
-    # SMOTE 오버샘플링 (클래스 불균형 처리) - n_neighbors 조정
+    # SMOTE 오버샘플링 (클래스 불균형 처리) - 올바른 파라미터 사용
     # SMOTE는 학습 데이터에만 적용, 검증/테스트 데이터는 원본 유지
     try:
         # 데이터 크기에 따라 n_neighbors 조정
@@ -381,24 +406,14 @@ if ott_df is not None:
         n_neighbors_ott = min(5, min_class_ott - 1) if min_class_ott > 1 else 1
         n_neighbors_ott = max(1, int(n_neighbors_ott))  # 최소 1, 정수로 변환
         
-        smote_tomek_ott = SMOTETomek(random_state=42, smote__k_neighbors=n_neighbors_ott)
-        X_ott_train_sm, y_ott_train_sm = smote_tomek_ott.fit_resample(X_ott_train_proc, y_ott_train)
-        print(f"SMOTE-Tomek 후 OTT 학습 데이터: {X_ott_train_sm.shape}, 이탈 비율: {y_ott_train_sm.mean():.2%}")
+        smote = SMOTE(k_neighbors=n_neighbors_ott, random_state=42)
+        X_ott_train_sm, y_ott_train_sm = smote.fit_resample(X_ott_train_proc, y_ott_train)
+        print(f"SMOTE 후 OTT 학습 데이터: {X_ott_train_sm.shape}, 이탈 비율: {y_ott_train_sm.mean():.2%}")
     except Exception as e:
-        print(f"⚠️ SMOTE-Tomek 실패 (OTT): {e}")
-        print("  일반 SMOTE로 대체...")
-        min_class_ott = min(np.sum(y_ott_train == 0), np.sum(y_ott_train == 1))
-        n_neighbors_ott = min(3, min_class_ott - 1) if min_class_ott > 1 else 1
-        n_neighbors_ott = max(1, int(n_neighbors_ott))
-        try:
-            smote = SMOTE(random_state=42, k_neighbors=n_neighbors_ott)
-            X_ott_train_sm, y_ott_train_sm = smote.fit_resample(X_ott_train_proc, y_ott_train)
-            print(f"SMOTE 후 OTT 학습 데이터: {X_ott_train_sm.shape}, 이탈 비율: {y_ott_train_sm.mean():.2%}")
-        except Exception as e2:
-            print(f"⚠️ SMOTE도 실패 (OTT): {e2}")
-            print("  오버샘플링 없이 진행...")
-            X_ott_train_sm, y_ott_train_sm = X_ott_train_proc, y_ott_train
-            print(f"OTT 학습 데이터: {X_ott_train_sm.shape}, 이탈 비율: {y_ott_train_sm.mean():.2%}")
+        print(f"⚠️ SMOTE 실패 (OTT): {e}")
+        print("  오버샘플링 없이 진행...")
+        X_ott_train_sm, y_ott_train_sm = X_ott_train_proc, y_ott_train
+        print(f"OTT 학습 데이터: {X_ott_train_sm.shape}, 이탈 비율: {y_ott_train_sm.mean():.2%}")
     
     # SNS SMOTE 오버샘플링 (주석 처리)
     # try:
@@ -426,7 +441,7 @@ if ott_df is not None:
     #         print(f"SNS 학습 데이터: {X_sns_train_sm.shape}, 이탈 비율: {y_sns_train_sm.mean():.2%}")
 else:
     # 기존 데이터 전처리
-    X_train_proc, X_test_proc, features, scaler, selector = preprocess_data(X_train, X_test, y_train)
+    X_train_proc, X_val_proc, X_test_proc, features, scaler, selector = preprocess_data(X_train, X_test, X_test, y_train)
     try:
         smote_tomek = SMOTETomek(random_state=42)
         X_train_sm, y_train_sm = smote_tomek.fit_resample(X_train_proc, y_train)
