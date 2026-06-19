@@ -13,8 +13,8 @@ from pathlib import Path
 from datetime import datetime
 import pickle
 
-FACE_DB_PATH = '/home/ubuntu/churn_project/face_data'
-USER_DB_PATH = '/home/ubuntu/churn_project/face_data/users.json'
+FACE_DB_PATH = 'D:/Personal/P-PJT/Team-PJT_/face_data'
+USER_DB_PATH = 'D:/Personal/P-PJT/Team-PJT_/face_data/users.json'
 os.makedirs(FACE_DB_PATH, exist_ok=True)
 
 # ─── 사용자 DB 관리 ───────────────────────────────────────────────────────────

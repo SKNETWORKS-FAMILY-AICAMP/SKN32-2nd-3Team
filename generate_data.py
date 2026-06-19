@@ -145,6 +145,6 @@ for i in range(N):
         df.loc[i, 'Tving_사용'] = other_tving[i]
 
 # 저장 (기존 파일명 유지)
-df.to_csv('/home/ubuntu/churn_project_new/churn_project/data/korea_telecom_churn.csv', index=False, encoding='utf-8-sig')
+df.to_csv('D:/Personal/P-PJT/Team-PJT_/churn_project_new/churn_project/data/korea_telecom_churn.csv', index=False, encoding='utf-8-sig')
 print(f"데이터 생성 완료: {df.shape}")
 print(f"이탈률: {df['이탈여부'].mean():.2%}")

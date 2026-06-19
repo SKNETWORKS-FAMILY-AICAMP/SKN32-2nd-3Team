@@ -32,7 +32,7 @@ else:
 plt.rcParams['axes.unicode_minus'] = False
 
 # ─── 1. 데이터 로드 ───────────────────────────────────────────────────────────
-df = pd.read_csv('/home/ubuntu/churn_project/churn_project/data/korea_telecom_churn.csv', encoding='utf-8-sig')
+df = pd.read_csv('D:/Personal/P-PJT/Team-PJT_/churn_project/data/korea_telecom_churn.csv', encoding='utf-8-sig')
 print("=" * 60)
 print("1. 데이터 기본 정보")
 print("=" * 60)
@@ -118,7 +118,7 @@ ax.bar(addon_churn.index, addon_churn.values * 100, color='#8BC34A')
 ax.set_title('부가서비스 수별 이탈률', fontweight='bold')
 
 plt.tight_layout()
-plt.savefig('/home/ubuntu/churn_project/churn_project/assets/eda_overview.png')
+plt.savefig('D:/Personal/P-PJT/Team-PJT_/churn_project/assets/eda_overview.png')
 plt.close()
 
 # ─── 5. 상관관계 히트맵 ──────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ numeric_df = df.select_dtypes(include=[np.number])
 corr_df = numeric_df.corr()
 fig, ax = plt.subplots(figsize=(12, 10))
 sns.heatmap(corr_df, annot=True, fmt='.2f', cmap='coolwarm', ax=ax)
-plt.savefig('/home/ubuntu/churn_project/churn_project/assets/correlation_heatmap.png')
+plt.savefig('D:/Personal/P-PJT/Team-PJT_/churn_project/assets/correlation_heatmap.png')
 plt.close()
 
 # ─── 6. 인코딩 및 스케일링 ────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ for col in cat_cols:
     df_model[col] = le.fit_transform(df_model[col])
     le_dict[col] = le
 
-joblib.dump(le_dict, '/home/ubuntu/churn_project/churn_project/models/label_encoders.pkl')
+joblib.dump(le_dict, 'D:/Personal/P-PJT/Team-PJT_/churn_project/models/label_encoders.pkl')
 
 feature_cols = [c for c in df_model.columns if c != '이탈여부']
 X = df_model[feature_cols]
@@ -151,11 +151,11 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 X_scaled = pd.DataFrame(X_scaled, columns=feature_cols)
 
-joblib.dump(scaler, '/home/ubuntu/churn_project/churn_project/models/scaler.pkl')
-joblib.dump(feature_cols, '/home/ubuntu/churn_project/churn_project/models/feature_cols.pkl')
+joblib.dump(scaler, 'D:/Personal/P-PJT/Team-PJT_/churn_project/models/scaler.pkl')
+joblib.dump(feature_cols, 'D:/Personal/P-PJT/Team-PJT_/churn_project/models/feature_cols.pkl')
 
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y)
-joblib.dump((X_train, X_test, y_train, y_test), '/home/ubuntu/churn_project/churn_project/models/train_test_split.pkl')
+joblib.dump((X_train, X_test, y_train, y_test), 'D:/Personal/P-PJT/Team-PJT_/churn_project/models/train_test_split.pkl')
 
-df_model.to_csv('/home/ubuntu/churn_project/churn_project/data/processed_data.csv', index=False, encoding='utf-8-sig')
+df_model.to_csv('D:/Personal/P-PJT/Team-PJT_/churn_project/data/processed_data.csv', index=False, encoding='utf-8-sig')
 print("전처리 및 EDA 완료")
