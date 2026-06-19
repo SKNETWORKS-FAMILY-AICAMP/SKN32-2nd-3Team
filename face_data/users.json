@@ -1,0 +1,32 @@
+{
+  "admin": {
+    "username": "admin",
+    "role": "admin",
+    "face_path": "",
+    "embedding_path": "/home/ubuntu/churn_project/face_data/admin_embedding.pkl",
+    "registered_at": "2026-06-16T02:25:33.030983",
+    "last_login": null,
+    "login_count": 0,
+    "is_demo": true
+  },
+  "analyst1": {
+    "username": "analyst1",
+    "role": "analyst",
+    "face_path": "",
+    "embedding_path": "/home/ubuntu/churn_project/face_data/analyst1_embedding.pkl",
+    "registered_at": "2026-06-16T02:25:33.031140",
+    "last_login": null,
+    "login_count": 0,
+    "is_demo": true
+  },
+  "viewer1": {
+    "username": "viewer1",
+    "role": "viewer",
+    "face_path": "",
+    "embedding_path": "/home/ubuntu/churn_project/face_data/viewer1_embedding.pkl",
+    "registered_at": "2026-06-16T02:25:33.031276",
+    "last_login": null,
+    "login_count": 0,
+    "is_demo": true
+  }
+}
