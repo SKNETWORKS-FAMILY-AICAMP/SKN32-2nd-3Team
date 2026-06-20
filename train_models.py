@@ -87,33 +87,82 @@ def load_ott_sns_data():
     return ott_df, sns_df
 
 def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
-    """OTT 데이터 전처리 및 특성 추출"""
+    """OTT 데이터 전처리 및 특성 추출 (User-level Aggregation + Time-based Churn Definition)"""
     print("📊 OTT 데이터 전처리 중...")
+
+    # ─── 데이터 타입 확인 ───
+    print(f"🔍 ott_money['pid'] 타입: {type(ott_money['pid'].iloc[0])}")
+    print(f"🔍 ott_time.columns[1] 타입: {type(ott_time.columns[1])}")
+
+    # ─── 데이터 타입 통일 (모든 컬럼을 문자열로) ───
+    ott_money['pid'] = ott_money['pid'].astype(str)
+    ott_time.columns = ott_time.columns.astype(str)
+    ott_usage_01.columns = ott_usage_01.columns.astype(str)
+    ott_usage_02.columns = ott_usage_02.columns.astype(str)
+    print("✅ 데이터 타입 통일 완료 (모든 컬럼 → 문자열)")
 
     # ott_money: pid별 비용 데이터
     money_dict = dict(zip(ott_money['pid'], ott_money['p21d26058']))
+    money_users = set(ott_money['pid'])
+    print(f"📊 ott_money 사용자 수: {len(money_users)}")
 
     # ott_time: 연도별 사용자 시계열 데이터
     time_data = ott_time.set_index('YEAR')
+    time_users = set(time_data.columns) - {'YEAR'}
+    print(f"📊 ott_time 사용자 수: {len(time_users)}")
 
     # ott_usage: 연도별 사용 패턴 데이터
     usage_01_data = ott_usage_01.set_index('YEAR')
+    usage_01_users = set(usage_01_data.columns) - {'YEAR'}
+    print(f"📊 ott_usage_01 사용자 수: {len(usage_01_users)}")
+    
     usage_02_data = ott_usage_02.set_index('YEAR')
+    usage_02_users = set(usage_02_data.columns) - {'YEAR'}
+    print(f"📊 ott_usage_02 사용자 수: {len(usage_02_users)}")
+    
+    # 데이터 타입 복구 (숫자형 컬럼은 다시 숫자형으로)
+    # ott_time, ott_usage 데이터는 숫자형으로 유지
+    time_data = time_data.apply(pd.to_numeric, errors='coerce')
+    usage_01_data = usage_01_data.apply(pd.to_numeric, errors='coerce')
+    usage_02_data = usage_02_data.apply(pd.to_numeric, errors='coerce')
+    print("✅ 숫자형 데이터 타입 복구 완료")
 
     # 사용자별 특성 추출
     user_features = []
 
-    # 모든 사용자 ID 추출
-    all_users = set()
-    for col in time_data.columns:
-        if col != 'YEAR':
-            all_users.add(col)
+    # 모든 사용자 ID 추출 (ott_time 기준)
+    all_users = time_users
+    
+    # 데이터 소스 간 사용자 ID 교집합 분석 (타입 통일 후)
+    common_users = time_users & money_users
+    print(f"📊 ott_time & ott_money 교집합: {len(common_users)}")
+    
+    common_users_all = time_users & money_users & usage_01_users & usage_02_users
+    print(f"📊 모든 데이터 소스 교집합: {len(common_users_all)}")
+    
+    print(f"📊 최종 분석 대상 사용자 수 (ott_time 기준): {len(all_users)}")
 
-    for user_id in list(all_users)[:1000]:  # 샘플링 (메모리 관리)
+    # Linear Regression으로 trend 계산 함수
+    def calculate_linear_trend(series):
+        """Linear Regression으로 기울기(slope) 계산"""
+        if len(series) < 2:
+            return 0
+        try:
+            from sklearn.linear_model import LinearRegression
+            years = np.arange(len(series)).reshape(-1, 1)
+            values = series.values.reshape(-1, 1)
+            model = LinearRegression()
+            model.fit(years, values)
+            return model.coef_[0][0]
+        except:
+            return 0
+
+    # 전체 사용자 사용 (샘플링 제거)
+    for user_id in list(all_users):
         features = {'user_id': user_id}
 
-        # 비용 정보
-        features['ott_money'] = money_dict.get(user_id, 0)
+        # 비용 정보 (결측치는 np.nan으로 처리)
+        features['ott_money'] = money_dict.get(user_id, np.nan)
 
         # 시계열 특성 (ott_time)
         if user_id in time_data.columns:
@@ -121,15 +170,58 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
             if len(user_time) > 0:
                 features['ott_time_mean'] = user_time.mean()
                 features['ott_time_std'] = user_time.std()
-                features['ott_time_trend'] = user_time.iloc[-1] - user_time.iloc[0] if len(user_time) > 1 else 0
+                # CV (Coefficient of Variation) 추가
+                if features['ott_time_mean'] > 0:
+                    features['ott_time_cv'] = features['ott_time_std'] / features['ott_time_mean']
+                else:
+                    features['ott_time_cv'] = 0
+                # Linear Regression으로 trend 계산
+                features['ott_time_trend'] = calculate_linear_trend(user_time)
                 features['ott_time_max'] = user_time.max()
                 features['ott_time_min'] = user_time.min()
+                
+                # ─── 추가 피처: 이탈 신호 강화 ───
+                # 1순위: 최근년도 대비 변화량 (change_last)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    features['ott_time_change_last'] = sorted_time.iloc[-1] - sorted_time.iloc[-2]
+                else:
+                    features['ott_time_change_last'] = 0
+                
+                # 2순위: 연속 감소 횟수 (decline_count)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    decline_count = 0
+                    max_decline = 0
+                    for i in range(1, len(sorted_time)):
+                        if sorted_time.iloc[i] < sorted_time.iloc[i-1]:
+                            decline_count += 1
+                            drop = sorted_time.iloc[i] - sorted_time.iloc[i-1]
+                            if drop < max_decline:
+                                max_decline = drop
+                    features['ott_time_decline_count'] = decline_count
+                    # 3순위: 최대 감소폭 (max_drop)
+                    features['ott_time_max_drop'] = max_decline
+                else:
+                    features['ott_time_decline_count'] = 0
+                    features['ott_time_max_drop'] = 0
+                
+                # 4순위: 최근 2년 평균 (recent_mean)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    features['ott_time_recent_mean'] = sorted_time.iloc[-2:].mean()
+                else:
+                    features['ott_time_recent_mean'] = user_time.mean()
             else:
-                features.update({'ott_time_mean': 0, 'ott_time_std': 0, 'ott_time_trend': 0,
-                               'ott_time_max': 0, 'ott_time_min': 0})
+                features.update({'ott_time_mean': 0, 'ott_time_std': 0, 'ott_time_cv': 0,
+                               'ott_time_trend': 0, 'ott_time_max': 0, 'ott_time_min': 0,
+                               'ott_time_change_last': 0, 'ott_time_decline_count': 0,
+                               'ott_time_max_drop': 0, 'ott_time_recent_mean': 0})
         else:
-            features.update({'ott_time_mean': 0, 'ott_time_std': 0, 'ott_time_trend': 0,
-                           'ott_time_max': 0, 'ott_time_min': 0})
+            features.update({'ott_time_mean': 0, 'ott_time_std': 0, 'ott_time_cv': 0,
+                           'ott_time_trend': 0, 'ott_time_max': 0, 'ott_time_min': 0,
+                           'ott_time_change_last': 0, 'ott_time_decline_count': 0,
+                           'ott_time_max_drop': 0, 'ott_time_recent_mean': 0})
 
         # 사용 패턴 특성 (ott_usage)
         if user_id in usage_01_data.columns:
@@ -137,28 +229,64 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
             if len(user_usage_01) > 0:
                 features['ott_usage_01_mean'] = user_usage_01.mean()
                 features['ott_usage_01_std'] = user_usage_01.std()
-                features['ott_usage_01_trend'] = user_usage_01.iloc[-1] - user_usage_01.iloc[0] if len(user_usage_01) > 1 else 0
+                if features['ott_usage_01_mean'] > 0:
+                    features['ott_usage_01_cv'] = features['ott_usage_01_std'] / features['ott_usage_01_mean']
+                else:
+                    features['ott_usage_01_cv'] = 0
+                features['ott_usage_01_trend'] = calculate_linear_trend(user_usage_01)
             else:
-                features.update({'ott_usage_01_mean': 0, 'ott_usage_01_std': 0, 'ott_usage_01_trend': 0})
+                features.update({'ott_usage_01_mean': 0, 'ott_usage_01_std': 0, 'ott_usage_01_cv': 0,
+                               'ott_usage_01_trend': 0})
         else:
-            features.update({'ott_usage_01_mean': 0, 'ott_usage_01_std': 0, 'ott_usage_01_trend': 0})
+            features.update({'ott_usage_01_mean': 0, 'ott_usage_01_std': 0, 'ott_usage_01_cv': 0,
+                           'ott_usage_01_trend': 0})
 
         if user_id in usage_02_data.columns:
             user_usage_02 = usage_02_data[user_id].dropna()
             if len(user_usage_02) > 0:
                 features['ott_usage_02_mean'] = user_usage_02.mean()
                 features['ott_usage_02_std'] = user_usage_02.std()
-                features['ott_usage_02_trend'] = user_usage_02.iloc[-1] - user_usage_02.iloc[0] if len(user_usage_02) > 1 else 0
+                if features['ott_usage_02_mean'] > 0:
+                    features['ott_usage_02_cv'] = features['ott_usage_02_std'] / features['ott_usage_02_mean']
+                else:
+                    features['ott_usage_02_cv'] = 0
+                features['ott_usage_02_trend'] = calculate_linear_trend(user_usage_02)
             else:
-                features.update({'ott_usage_02_mean': 0, 'ott_usage_02_std': 0, 'ott_usage_02_trend': 0})
+                features.update({'ott_usage_02_mean': 0, 'ott_usage_02_std': 0, 'ott_usage_02_cv': 0,
+                               'ott_usage_02_trend': 0})
         else:
-            features.update({'ott_usage_02_mean': 0, 'ott_usage_02_std': 0, 'ott_usage_02_trend': 0})
+            features.update({'ott_usage_02_mean': 0, 'ott_usage_02_std': 0, 'ott_usage_02_cv': 0,
+                           'ott_usage_02_trend': 0})
 
-        # 이탈 라벨 생성 (데이터 누수 방지를 위해 다른 기준 사용)
-        # 전체 사용 시간이 낮고 감소하는 경우를 이탈로 정의
-        total_time = features.get('ott_time_mean', 0) + features.get('ott_usage_01_mean', 0)
-        if total_time < 10 and features.get('ott_time_trend', 0) < 0:
-            features['churn'] = 1
+        # ─── 실제 이탈 정의 (시간 기반) ───
+        # 2023 사용 → 2024 사용 → 2025 사용 안함이면 churn
+        # 또는 최근 2년 사용시간 80% 감소이면 churn
+        if user_id in time_data.columns:
+            user_time = time_data[user_id].dropna()
+            years = user_time.index.tolist()
+            
+            # 2023, 2024, 2025 사용 확인
+            usage_2023 = user_time.get(2023, 0)
+            usage_2024 = user_time.get(2024, 0)
+            usage_2025 = user_time.get(2025, 0)
+            
+            # 조건 1: 2023 사용 → 2024 사용 → 2025 사용 안함
+            if usage_2023 > 0 and usage_2024 > 0 and usage_2025 == 0:
+                features['churn'] = 1
+            # 조건 2: 최근 2년 사용시간 80% 감소
+            elif len(years) >= 2:
+                recent_years = sorted(years)[-2:]
+                recent_usage = [user_time.get(year, 0) for year in recent_years]
+                if recent_usage[0] > 0:
+                    decrease_ratio = (recent_usage[0] - recent_usage[1]) / recent_usage[0]
+                    if decrease_ratio >= 0.8:
+                        features['churn'] = 1
+                    else:
+                        features['churn'] = 0
+                else:
+                    features['churn'] = 0
+            else:
+                features['churn'] = 0
         else:
             features['churn'] = 0
 
@@ -166,6 +294,23 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
 
     ott_df = pd.DataFrame(user_features)
     print(f"✅ OTT 데이터 전처리 완료: {ott_df.shape}")
+    print(f"📊 데이터 손실: 원본 {len(all_users)}명 → 전처리 후 {ott_df.shape[0]}명 (손실: {len(all_users) - ott_df.shape[0]}명, {((len(all_users) - ott_df.shape[0]) / len(all_users) * 100):.1f}%)")
+    
+    # 숫자형 변환 (ott_money 등)
+    ott_df['ott_money'] = pd.to_numeric(ott_df['ott_money'], errors='coerce')
+    print("✅ 숫자형 변환 완료")
+    
+    # 컬럼 타입 확인
+    print("\n===== ott_df 컬럼 타입 확인 =====")
+    print(ott_df.dtypes)
+    print("object 타입 컬럼:", ott_df.select_dtypes(include=['object']).columns.tolist())
+    print("==================================\n")
+    
+    # ott_money 매칭 확인
+    print(f"📊 ott_money 통계:")
+    print(ott_df['ott_money'].describe())
+    print(f"📊 ott_money 결측치 개수: {ott_df['ott_money'].isna().sum()} ({ott_df['ott_money'].isna().sum() / len(ott_df) * 100:.1f}%)")
+    
     return ott_df
 
 def preprocess_sns_data(sns_time, sns_usage_01, sns_usage_02, sns_usage_03):
@@ -276,8 +421,8 @@ else:
     print("OTT 데이터로 모델 학습 준비")
     print("=" * 60)
 
-    # 특성 선택 (데이터 누수 방지를 위해 trend 특성 제거)
-    ott_features = [col for col in ott_df.columns if col not in ['user_id', 'churn'] and 'trend' not in col]
+    # 특성 선택 (안전한 LinearRegression 기반 trend feature는 유지)
+    ott_features = [col for col in ott_df.columns if col not in ['user_id', 'churn']]
     X_ott = ott_df[ott_features].fillna(0)
     y_ott = ott_df['churn']
 
@@ -345,6 +490,12 @@ def preprocess_data(X_train, X_val, X_test, y_train):
     from sklearn.impute import SimpleImputer
     from sklearn.preprocessing import StandardScaler
     from sklearn.feature_selection import SelectKBest, f_classif
+
+    # 디버깅: 컬럼 타입 확인
+    print("\n===== 전처리 전 컬럼 타입 확인 =====")
+    print(X_train.dtypes)
+    print("object 타입 컬럼:", X_train.select_dtypes(include=['object']).columns.tolist())
+    print("====================================\n")
 
     # 결측치 처리
     imp = SimpleImputer(strategy='median')
