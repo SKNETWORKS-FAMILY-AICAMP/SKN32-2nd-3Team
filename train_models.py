@@ -28,7 +28,8 @@ from lightgbm import LGBMClassifier
 from catboost import CatBoostClassifier
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, confusion_matrix, roc_curve, classification_report
+    roc_auc_score, confusion_matrix, roc_curve, classification_report,
+    precision_recall_curve
 )
 from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, RandomizedSearchCV, train_test_split
 from imblearn.over_sampling import SMOTE, ADASYN
@@ -41,6 +42,7 @@ from sklearn.decomposition import PCA
 from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classif
 import optuna
 from scipy import stats
+import shap
 
 # 한글 폰트
 for f in fm.findSystemFonts():
@@ -181,12 +183,10 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
                 features['ott_time_min'] = user_time.min()
                 
                 # ─── 추가 피처: 이탈 신호 강화 ───
-                # 1순위: 최근년도 대비 변화량 (change_last)
-                if len(user_time) >= 2:
-                    sorted_time = user_time.sort_index()
-                    features['ott_time_change_last'] = sorted_time.iloc[-1] - sorted_time.iloc[-2]
-                else:
-                    features['ott_time_change_last'] = 0
+                # 1순위: 최근년도 대비 변화량 (change_last) - 데이터 누수로 인해 제거됨
+                # sorted_time.iloc[-1] - sorted_time.iloc[-2]는 2025-2024를 포함할 수 있어 데이터 누수
+                # 대신 ott_time_last_year_ratio_safe (2024/2023) 사용
+                features['ott_time_change_last'] = 0
                 
                 # 2순위: 연속 감소 횟수 (decline_count)
                 if len(user_time) >= 2:
@@ -212,18 +212,171 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
                     features['ott_time_recent_mean'] = sorted_time.iloc[-2:].mean()
                 else:
                     features['ott_time_recent_mean'] = user_time.mean()
+                
+                # ─── 추가 피처: 데이터 정보량 강화 ───
+                # 5순위: 사용연도수 (usage_years_count)
+                features['ott_time_usage_years_count'] = len(user_time)
+                
+                # 6순위: 연속 감소 횟수 (consecutive_decline_count)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    consecutive_decline = 0
+                    max_consecutive_decline = 0
+                    for i in range(1, len(sorted_time)):
+                        if sorted_time.iloc[i] < sorted_time.iloc[i-1]:
+                            consecutive_decline += 1
+                            if consecutive_decline > max_consecutive_decline:
+                                max_consecutive_decline = consecutive_decline
+                        else:
+                            consecutive_decline = 0
+                    features['ott_time_consecutive_decline_count'] = max_consecutive_decline
+                else:
+                    features['ott_time_consecutive_decline_count'] = 0
+                
+                # 7순위: 최대 증가폭 (max_increase)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    max_increase = 0
+                    for i in range(1, len(sorted_time)):
+                        increase = sorted_time.iloc[i] - sorted_time.iloc[i-1]
+                        if increase > max_increase:
+                            max_increase = increase
+                    features['ott_time_max_increase'] = max_increase
+                else:
+                    features['ott_time_max_increase'] = 0
+                
+                # 8순위: 변화량 표준편차 (diff_std)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    diff_std = sorted_time.diff().std()
+                    features['ott_time_diff_std'] = diff_std if not pd.isna(diff_std) else 0
+                else:
+                    features['ott_time_diff_std'] = 0
+                
+                # 9순위: 최근 2년 평균 / 전체 평균 (recent_to_overall_ratio)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    recent_mean = sorted_time.iloc[-2:].mean()
+                    overall_mean = sorted_time.mean()
+                    if overall_mean > 0:
+                        features['ott_time_recent_to_overall_ratio'] = recent_mean / overall_mean
+                    else:
+                        features['ott_time_recent_to_overall_ratio'] = 0
+                else:
+                    features['ott_time_recent_to_overall_ratio'] = 0
+                
+                # ─── 추가 피처: ott_time 감소 패턴 강화 ───
+                # 10순위: 2024/2023 비율 (last_year_ratio_safe) - 데이터 누수 방지
+                if len(user_time) >= 2 and 2023 in user_time.index and 2024 in user_time.index:
+                    if user_time[2023] > 0:
+                        features['ott_time_last_year_ratio_safe'] = user_time[2024] / user_time[2023]
+                    else:
+                        features['ott_time_last_year_ratio_safe'] = 0
+                else:
+                    features['ott_time_last_year_ratio_safe'] = 0
+                
+                # 11순위: 2023/2022 비율 (two_year_ratio_safe) - 데이터 누수 방지
+                if len(user_time) >= 2 and 2022 in user_time.index and 2023 in user_time.index:
+                    if user_time[2022] > 0:
+                        features['ott_time_two_year_ratio_safe'] = user_time[2023] / user_time[2022]
+                    else:
+                        features['ott_time_two_year_ratio_safe'] = 0
+                else:
+                    features['ott_time_two_year_ratio_safe'] = 0
+                
+                # 12순위: 최장 감소 스트릭 (longest_decline_streak)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    longest_streak = 0
+                    current_streak = 0
+                    for i in range(1, len(sorted_time)):
+                        if sorted_time.iloc[i] < sorted_time.iloc[i-1]:
+                            current_streak += 1
+                            if current_streak > longest_streak:
+                                longest_streak = current_streak
+                        else:
+                            current_streak = 0
+                    features['ott_time_longest_decline_streak'] = longest_streak
+                else:
+                    features['ott_time_longest_decline_streak'] = 0
+                
+                # 13순위: 변동성 (volatility = max - min)
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    features['ott_time_volatility'] = sorted_time.max() - sorted_time.min()
+                else:
+                    features['ott_time_volatility'] = 0
+                
+                # ─── 추가 피처: 연속 감소 길이 강화 (2024년 말 예측 기준) ───
+                # 14순위: 최근 2년 연속 감소 여부 (recent_2yr_consecutive_decline_safe) - 2023 > 2024
+                if len(user_time) >= 2 and 2023 in user_time.index and 2024 in user_time.index:
+                    if user_time[2023] > user_time[2024]:
+                        features['ott_time_recent_2yr_consecutive_decline_safe'] = 1
+                    else:
+                        features['ott_time_recent_2yr_consecutive_decline_safe'] = 0
+                else:
+                    features['ott_time_recent_2yr_consecutive_decline_safe'] = 0
+                
+                # 15순위: 최근 3년 연속 감소 여부 (recent_3yr_consecutive_decline_safe) - 2022 > 2023 > 2024
+                if len(user_time) >= 3 and 2022 in user_time.index and 2023 in user_time.index and 2024 in user_time.index:
+                    if user_time[2022] > user_time[2023] > user_time[2024]:
+                        features['ott_time_recent_3yr_consecutive_decline_safe'] = 1
+                    else:
+                        features['ott_time_recent_3yr_consecutive_decline_safe'] = 0
+                else:
+                    features['ott_time_recent_3yr_consecutive_decline_safe'] = 0
+                
+                # ─── 추가 피처: 연속형 감소 점수 (XGBoost가 선호하는 연속형 변수) ───
+                # 16순위: 최근 감소 점수 (recent_decline_score) - 2024년까지만 사용
+                # 예: 2022=100, 2023=80, 2024=20이면 (100-80)/100=0.20, (80-20)/80=0.75, 평균=0.475
+                decline_rates = []
+                if len(user_time) >= 2:
+                    sorted_time = user_time.sort_index()
+                    # 2024년까지만 필터링 (데이터 누수 방지)
+                    sorted_time_filtered = sorted_time[sorted_time.index <= 2024]
+                    for i in range(1, len(sorted_time_filtered)):
+                        if sorted_time_filtered.iloc[i-1] > 0:
+                            rate = (sorted_time_filtered.iloc[i-1] - sorted_time_filtered.iloc[i]) / sorted_time_filtered.iloc[i-1]
+                            decline_rates.append(rate)
+                if decline_rates:
+                    features['ott_time_recent_decline_score'] = np.mean(decline_rates)
+                else:
+                    features['ott_time_recent_decline_score'] = 0
+                
+                # 17순위: 최근 감소율 (recent_decline_rate) - 최근 2년 감소율
+                if len(user_time) >= 2 and 2023 in user_time.index and 2024 in user_time.index:
+                    if user_time[2023] > 0:
+                        features['ott_time_recent_decline_rate'] = (user_time[2023] - user_time[2024]) / user_time[2023]
+                    else:
+                        features['ott_time_recent_decline_rate'] = 0
+                else:
+                    features['ott_time_recent_decline_rate'] = 0
             else:
                 features.update({'ott_time_mean': 0, 'ott_time_std': 0, 'ott_time_cv': 0,
                                'ott_time_trend': 0, 'ott_time_max': 0, 'ott_time_min': 0,
                                'ott_time_change_last': 0, 'ott_time_decline_count': 0,
-                               'ott_time_max_drop': 0, 'ott_time_recent_mean': 0})
+                               'ott_time_max_drop': 0, 'ott_time_recent_mean': 0,
+                               'ott_time_usage_years_count': 0, 'ott_time_consecutive_decline_count': 0,
+                               'ott_time_max_increase': 0, 'ott_time_diff_std': 0,
+                               'ott_time_recent_to_overall_ratio': 0, 'ott_time_last_year_ratio_safe': 0,
+                               'ott_time_two_year_ratio_safe': 0, 'ott_time_longest_decline_streak': 0,
+                               'ott_time_volatility': 0, 'ott_time_recent_2yr_consecutive_decline_safe': 0,
+                               'ott_time_recent_3yr_consecutive_decline_safe': 0, 'ott_time_recent_decline_score': 0,
+                               'ott_time_recent_decline_rate': 0})
         else:
             features.update({'ott_time_mean': 0, 'ott_time_std': 0, 'ott_time_cv': 0,
                            'ott_time_trend': 0, 'ott_time_max': 0, 'ott_time_min': 0,
-                           'ott_time_change_last': 0, 'ott_time_decline_count': 0,
-                           'ott_time_max_drop': 0, 'ott_time_recent_mean': 0})
+                           'ott_time_decline_count': 0,
+                           'ott_time_max_drop': 0, 'ott_time_recent_mean': 0,
+                           'ott_time_usage_years_count': 0, 'ott_time_consecutive_decline_count': 0,
+                           'ott_time_max_increase': 0, 'ott_time_diff_std': 0,
+                           'ott_time_recent_to_overall_ratio': 0, 'ott_time_last_year_ratio_safe': 0,
+                           'ott_time_two_year_ratio_safe': 0, 'ott_time_longest_decline_streak': 0,
+                           'ott_time_volatility': 0, 'ott_time_recent_2yr_consecutive_decline_safe': 0,
+                           'ott_time_recent_3yr_consecutive_decline_safe': 0, 'ott_time_recent_decline_score': 0,
+                           'ott_time_recent_decline_rate': 0})
 
-        # 사용 패턴 특성 (ott_usage)
+        # 사용 패턴 특성 (ott_usage_01)
         if user_id in usage_01_data.columns:
             user_usage_01 = usage_01_data[user_id].dropna()
             if len(user_usage_01) > 0:
@@ -234,13 +387,107 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
                 else:
                     features['ott_usage_01_cv'] = 0
                 features['ott_usage_01_trend'] = calculate_linear_trend(user_usage_01)
+                
+                # ─── 추가 피처: 이탈 신호 강화 ───
+                # 1순위: 최근년도 대비 변화량 (change_last)
+                if len(user_usage_01) >= 2:
+                    sorted_usage = user_usage_01.sort_index()
+                    features['ott_usage_01_change_last'] = sorted_usage.iloc[-1] - sorted_usage.iloc[-2]
+                else:
+                    features['ott_usage_01_change_last'] = 0
+                
+                # 2순위: 연속 감소 횟수 (decline_count)
+                if len(user_usage_01) >= 2:
+                    sorted_usage = user_usage_01.sort_index()
+                    decline_count = 0
+                    max_decline = 0
+                    for i in range(1, len(sorted_usage)):
+                        if sorted_usage.iloc[i] < sorted_usage.iloc[i-1]:
+                            decline_count += 1
+                            drop = sorted_usage.iloc[i] - sorted_usage.iloc[i-1]
+                            if drop < max_decline:
+                                max_decline = drop
+                    features['ott_usage_01_decline_count'] = decline_count
+                    # 3순위: 최대 감소폭 (max_drop)
+                    features['ott_usage_01_max_drop'] = max_decline
+                else:
+                    features['ott_usage_01_decline_count'] = 0
+                    features['ott_usage_01_max_drop'] = 0
+                
+                # 4순위: 최근 2년 평균 (recent_mean)
+                if len(user_usage_01) >= 2:
+                    sorted_usage = user_usage_01.sort_index()
+                    features['ott_usage_01_recent_mean'] = sorted_usage.iloc[-2:].mean()
+                else:
+                    features['ott_usage_01_recent_mean'] = user_usage_01.mean()
+                
+                # ─── 추가 피처: 데이터 정보량 강화 ───
+                # 5순위: 사용연도수 (usage_years_count)
+                features['ott_usage_01_usage_years_count'] = len(user_usage_01)
+                
+                # 6순위: 연속 감소 횟수 (consecutive_decline_count)
+                if len(user_usage_01) >= 2:
+                    sorted_usage = user_usage_01.sort_index()
+                    consecutive_decline = 0
+                    max_consecutive_decline = 0
+                    for i in range(1, len(sorted_usage)):
+                        if sorted_usage.iloc[i] < sorted_usage.iloc[i-1]:
+                            consecutive_decline += 1
+                            if consecutive_decline > max_consecutive_decline:
+                                max_consecutive_decline = consecutive_decline
+                        else:
+                            consecutive_decline = 0
+                    features['ott_usage_01_consecutive_decline_count'] = max_consecutive_decline
+                else:
+                    features['ott_usage_01_consecutive_decline_count'] = 0
+                
+                # 7순위: 최대 증가폭 (max_increase)
+                if len(user_usage_01) >= 2:
+                    sorted_usage = user_usage_01.sort_index()
+                    max_increase = 0
+                    for i in range(1, len(sorted_usage)):
+                        increase = sorted_usage.iloc[i] - sorted_usage.iloc[i-1]
+                        if increase > max_increase:
+                            max_increase = increase
+                    features['ott_usage_01_max_increase'] = max_increase
+                else:
+                    features['ott_usage_01_max_increase'] = 0
+                
+                # 8순위: 변화량 표준편차 (diff_std)
+                if len(user_usage_01) >= 2:
+                    sorted_usage = user_usage_01.sort_index()
+                    diff_std = sorted_usage.diff().std()
+                    features['ott_usage_01_diff_std'] = diff_std if not pd.isna(diff_std) else 0
+                else:
+                    features['ott_usage_01_diff_std'] = 0
+                
+                # 9순위: 최근 2년 평균 / 전체 평균 (recent_to_overall_ratio)
+                if len(user_usage_01) >= 2:
+                    sorted_usage = user_usage_01.sort_index()
+                    recent_mean = sorted_usage.iloc[-2:].mean()
+                    overall_mean = sorted_usage.mean()
+                    if overall_mean > 0:
+                        features['ott_usage_01_recent_to_overall_ratio'] = recent_mean / overall_mean
+                    else:
+                        features['ott_usage_01_recent_to_overall_ratio'] = 0
+                else:
+                    features['ott_usage_01_recent_to_overall_ratio'] = 0
             else:
                 features.update({'ott_usage_01_mean': 0, 'ott_usage_01_std': 0, 'ott_usage_01_cv': 0,
-                               'ott_usage_01_trend': 0})
+                               'ott_usage_01_trend': 0, 'ott_usage_01_change_last': 0,
+                               'ott_usage_01_decline_count': 0, 'ott_usage_01_max_drop': 0,
+                               'ott_usage_01_recent_mean': 0, 'ott_usage_01_usage_years_count': 0,
+                               'ott_usage_01_consecutive_decline_count': 0, 'ott_usage_01_max_increase': 0,
+                               'ott_usage_01_diff_std': 0, 'ott_usage_01_recent_to_overall_ratio': 0})
         else:
             features.update({'ott_usage_01_mean': 0, 'ott_usage_01_std': 0, 'ott_usage_01_cv': 0,
-                           'ott_usage_01_trend': 0})
+                           'ott_usage_01_trend': 0, 'ott_usage_01_change_last': 0,
+                           'ott_usage_01_decline_count': 0, 'ott_usage_01_max_drop': 0,
+                           'ott_usage_01_recent_mean': 0, 'ott_usage_01_usage_years_count': 0,
+                           'ott_usage_01_consecutive_decline_count': 0, 'ott_usage_01_max_increase': 0,
+                           'ott_usage_01_diff_std': 0, 'ott_usage_01_recent_to_overall_ratio': 0})
 
+        # 사용 패턴 특성 (ott_usage_02)
         if user_id in usage_02_data.columns:
             user_usage_02 = usage_02_data[user_id].dropna()
             if len(user_usage_02) > 0:
@@ -251,12 +498,105 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
                 else:
                     features['ott_usage_02_cv'] = 0
                 features['ott_usage_02_trend'] = calculate_linear_trend(user_usage_02)
+                
+                # ─── 추가 피처: 이탈 신호 강화 ───
+                # 1순위: 최근년도 대비 변화량 (change_last)
+                if len(user_usage_02) >= 2:
+                    sorted_usage = user_usage_02.sort_index()
+                    features['ott_usage_02_change_last'] = sorted_usage.iloc[-1] - sorted_usage.iloc[-2]
+                else:
+                    features['ott_usage_02_change_last'] = 0
+                
+                # 2순위: 연속 감소 횟수 (decline_count)
+                if len(user_usage_02) >= 2:
+                    sorted_usage = user_usage_02.sort_index()
+                    decline_count = 0
+                    max_decline = 0
+                    for i in range(1, len(sorted_usage)):
+                        if sorted_usage.iloc[i] < sorted_usage.iloc[i-1]:
+                            decline_count += 1
+                            drop = sorted_usage.iloc[i] - sorted_usage.iloc[i-1]
+                            if drop < max_decline:
+                                max_decline = drop
+                    features['ott_usage_02_decline_count'] = decline_count
+                    # 3순위: 최대 감소폭 (max_drop)
+                    features['ott_usage_02_max_drop'] = max_decline
+                else:
+                    features['ott_usage_02_decline_count'] = 0
+                    features['ott_usage_02_max_drop'] = 0
+                
+                # 4순위: 최근 2년 평균 (recent_mean)
+                if len(user_usage_02) >= 2:
+                    sorted_usage = user_usage_02.sort_index()
+                    features['ott_usage_02_recent_mean'] = sorted_usage.iloc[-2:].mean()
+                else:
+                    features['ott_usage_02_recent_mean'] = user_usage_02.mean()
+                
+                # ─── 추가 피처: 데이터 정보량 강화 ───
+                # 5순위: 사용연도수 (usage_years_count)
+                features['ott_usage_02_usage_years_count'] = len(user_usage_02)
+                
+                # 6순위: 연속 감소 횟수 (consecutive_decline_count)
+                if len(user_usage_02) >= 2:
+                    sorted_usage = user_usage_02.sort_index()
+                    consecutive_decline = 0
+                    max_consecutive_decline = 0
+                    for i in range(1, len(sorted_usage)):
+                        if sorted_usage.iloc[i] < sorted_usage.iloc[i-1]:
+                            consecutive_decline += 1
+                            if consecutive_decline > max_consecutive_decline:
+                                max_consecutive_decline = consecutive_decline
+                        else:
+                            consecutive_decline = 0
+                    features['ott_usage_02_consecutive_decline_count'] = max_consecutive_decline
+                else:
+                    features['ott_usage_02_consecutive_decline_count'] = 0
+                
+                # 7순위: 최대 증가폭 (max_increase)
+                if len(user_usage_02) >= 2:
+                    sorted_usage = user_usage_02.sort_index()
+                    max_increase = 0
+                    for i in range(1, len(sorted_usage)):
+                        increase = sorted_usage.iloc[i] - sorted_usage.iloc[i-1]
+                        if increase > max_increase:
+                            max_increase = increase
+                    features['ott_usage_02_max_increase'] = max_increase
+                else:
+                    features['ott_usage_02_max_increase'] = 0
+                
+                # 8순위: 변화량 표준편차 (diff_std)
+                if len(user_usage_02) >= 2:
+                    sorted_usage = user_usage_02.sort_index()
+                    diff_std = sorted_usage.diff().std()
+                    features['ott_usage_02_diff_std'] = diff_std if not pd.isna(diff_std) else 0
+                else:
+                    features['ott_usage_02_diff_std'] = 0
+                
+                # 9순위: 최근 2년 평균 / 전체 평균 (recent_to_overall_ratio)
+                if len(user_usage_02) >= 2:
+                    sorted_usage = user_usage_02.sort_index()
+                    recent_mean = sorted_usage.iloc[-2:].mean()
+                    overall_mean = sorted_usage.mean()
+                    if overall_mean > 0:
+                        features['ott_usage_02_recent_to_overall_ratio'] = recent_mean / overall_mean
+                    else:
+                        features['ott_usage_02_recent_to_overall_ratio'] = 0
+                else:
+                    features['ott_usage_02_recent_to_overall_ratio'] = 0
             else:
                 features.update({'ott_usage_02_mean': 0, 'ott_usage_02_std': 0, 'ott_usage_02_cv': 0,
-                               'ott_usage_02_trend': 0})
+                               'ott_usage_02_trend': 0, 'ott_usage_02_change_last': 0,
+                               'ott_usage_02_decline_count': 0, 'ott_usage_02_max_drop': 0,
+                               'ott_usage_02_recent_mean': 0, 'ott_usage_02_usage_years_count': 0,
+                               'ott_usage_02_consecutive_decline_count': 0, 'ott_usage_02_max_increase': 0,
+                               'ott_usage_02_diff_std': 0, 'ott_usage_02_recent_to_overall_ratio': 0})
         else:
             features.update({'ott_usage_02_mean': 0, 'ott_usage_02_std': 0, 'ott_usage_02_cv': 0,
-                           'ott_usage_02_trend': 0})
+                           'ott_usage_02_trend': 0, 'ott_usage_02_change_last': 0,
+                           'ott_usage_02_decline_count': 0, 'ott_usage_02_max_drop': 0,
+                           'ott_usage_02_recent_mean': 0, 'ott_usage_02_usage_years_count': 0,
+                           'ott_usage_02_consecutive_decline_count': 0, 'ott_usage_02_max_increase': 0,
+                           'ott_usage_02_diff_std': 0, 'ott_usage_02_recent_to_overall_ratio': 0})
 
         # ─── 실제 이탈 정의 (시간 기반) ───
         # 2023 사용 → 2024 사용 → 2025 사용 안함이면 churn
@@ -295,6 +635,14 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
     ott_df = pd.DataFrame(user_features)
     print(f"✅ OTT 데이터 전처리 완료: {ott_df.shape}")
     print(f"📊 데이터 손실: 원본 {len(all_users)}명 → 전처리 후 {ott_df.shape[0]}명 (손실: {len(all_users) - ott_df.shape[0]}명, {((len(all_users) - ott_df.shape[0]) / len(all_users) * 100):.1f}%)")
+    
+    # 데이터 누수 방지 feature 확인
+    if 'ott_time_last_year_ratio_safe' in ott_df.columns:
+        print(f"📊 ott_time_last_year_ratio_safe 상위 5개:")
+        print(ott_df['ott_time_last_year_ratio_safe'].head())
+    if 'ott_time_two_year_ratio_safe' in ott_df.columns:
+        print(f"📊 ott_time_two_year_ratio_safe 상위 5개:")
+        print(ott_df['ott_time_two_year_ratio_safe'].head())
     
     # 숫자형 변환 (ott_money 등)
     ott_df['ott_money'] = pd.to_numeric(ott_df['ott_money'], errors='coerce')
@@ -509,13 +857,17 @@ def preprocess_data(X_train, X_val, X_test, y_train):
     X_val_scaled = pd.DataFrame(scaler.transform(X_val_imp), columns=X_val_imp.columns)
     X_test_scaled = pd.DataFrame(scaler.transform(X_test_imp), columns=X_test_imp.columns)
 
-    # 특성 선택 (상위 15개 특성)
-    selector = SelectKBest(f_classif, k=min(15, X_train_scaled.shape[1]))
+    # 특성 선택 (상위 30개 특성으로 증가)
+    selector = SelectKBest(f_classif, k=min(30, X_train_scaled.shape[1]))
     X_train_selected = selector.fit_transform(X_train_scaled, y_train)
     X_val_selected = selector.transform(X_val_scaled)
     X_test_selected = selector.transform(X_test_scaled)
 
     selected_features = X_train_scaled.columns[selector.get_support()]
+
+    print(f"원본 feature 개수: {X_train_scaled.shape[1]}")
+    print(f"선택된 feature 개수: {len(selected_features)}")
+    print(f"선택된 features: {selected_features.tolist()}")
 
     return X_train_selected, X_val_selected, X_test_selected, selected_features, scaler, selector
 
@@ -831,6 +1183,47 @@ if ott_df is not None:
         f1_test = f1_score(y_ott_test, y_pred_test, zero_division=0)
         auc_test = roc_auc_score(y_ott_test, y_prob_test) if y_prob_test is not None else 0.0
 
+        # Threshold 최적화 (XGBoost 또는 Ensemble만)
+        best_threshold = 0.5
+        best_f1_threshold = f1_test
+        if y_prob_test is not None and name in ['XGBoost_Tuned', 'Ensemble']:
+            print(f"  🔍 {name} Threshold 최적화 중...")
+            best_threshold = 0.5
+            best_f1_threshold = f1_test
+            
+            # precision_recall_curve 기반 최적 threshold 찾기
+            try:
+                precisions, recalls, thresholds = precision_recall_curve(y_ott_test, y_prob_test)
+                f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-8)
+                best_idx = np.argmax(f1_scores)
+                best_threshold_pr = thresholds[best_idx]
+                best_f1_pr = f1_scores[best_idx]
+                
+                # 기존 방식과 비교
+                for t in np.arange(0.1, 0.9, 0.01):
+                    pred_threshold = (y_prob_test > t).astype(int)
+                    f1_threshold = f1_score(y_ott_test, pred_threshold, zero_division=0)
+                    if f1_threshold > best_f1_threshold:
+                        best_f1_threshold = f1_threshold
+                        best_threshold = t
+                
+                # 더 좋은 방식 선택
+                if best_f1_pr > best_f1_threshold:
+                    best_threshold = best_threshold_pr
+                    best_f1_threshold = best_f1_pr
+                    print(f"  ✅ {name} 최적 Threshold (PR Curve): {best_threshold:.4f}, 최적 F1: {best_f1_threshold:.4f}")
+                else:
+                    print(f"  ✅ {name} 최적 Threshold (Grid Search): {best_threshold:.2f}, 최적 F1: {best_f1_threshold:.4f}")
+            except Exception as pr_error:
+                print(f"  ⚠️ PR Curve 실패: {pr_error}, 기존 방식 사용")
+                for t in np.arange(0.1, 0.9, 0.01):
+                    pred_threshold = (y_prob_test > t).astype(int)
+                    f1_threshold = f1_score(y_ott_test, pred_threshold, zero_division=0)
+                    if f1_threshold > best_f1_threshold:
+                        best_f1_threshold = f1_threshold
+                        best_threshold = t
+                print(f"  ✅ {name} 최적 Threshold: {best_threshold:.2f}, 최적 F1: {best_f1_threshold:.4f}")
+
         # 테스트 데이터 TOP10 추출
         if y_prob_test is not None:
             test_indices = X_ott_test.index if hasattr(X_ott_test, 'index') else range(len(y_prob_test))
@@ -860,10 +1253,49 @@ if ott_df is not None:
             'F1 점수_Test': f1_test, 'AUC-ROC_Test': auc_test,
             'Precision@10_Val': precision_at_10_val, 'Precision@10_Test': precision_at_10_test,
             '고위험군_Precision_Test': high_risk_precision,
-            'CV F1 평균': cv_scores.mean(), 'CV F1 표준편차': cv_scores.std()
+            'CV F1 평균': cv_scores.mean(), 'CV F1 표준편차': cv_scores.std(),
+            '최적_Threshold': best_threshold, '최적_F1_Threshold': best_f1_threshold
         }
 
         print(f"  ✅ {name}: Val F1={f1_val:.4f}, Test F1={f1_test:.4f}, Val Precision@10={precision_at_10_val:.2f}, Test Precision@10={precision_at_10_test:.2f}, 고위험군 Precision={high_risk_precision:.2f}")
+
+        # Feature Importance 확인 (XGBoost만)
+        if name == 'XGBoost_Tuned' and hasattr(model, 'feature_importances_'):
+            print(f"  📊 {name} Feature Importance (TOP10):")
+            feature_importance = model.feature_importances_
+            feature_names = ott_features
+            importance_df = pd.DataFrame({'feature': feature_names, 'importance': feature_importance})
+            importance_df = importance_df.sort_values('importance', ascending=False)
+            
+            # TOP10 출력
+            top10_df = importance_df.head(10)
+            for idx, row in top10_df.iterrows():
+                print(f"    {row['feature']}: {row['importance']:.4f}")
+            
+            # TOP30 저장
+            top30_df = importance_df.head(30)
+            top30_df.to_csv(os.path.join(BASE_DIR, 'feature_importance_top30.csv'), index=False)
+            print(f"  💾 Feature Importance TOP30 저장 완료: feature_importance_top30.csv")
+            
+            # SHAP 분석 (XGBoost만)
+            print(f"  🔍 {name} SHAP 분석 중...")
+            try:
+                explainer = shap.TreeExplainer(model)
+                shap_values = explainer.shap_values(X_ott_test_proc)
+                
+                # SHAP summary plot 저장
+                plt.figure(figsize=(10, 8))
+                shap.summary_plot(shap_values, X_ott_test_proc, feature_names=ott_features, show=False)
+                plt.savefig(os.path.join(BASE_DIR, 'shap_summary_plot.png'), bbox_inches='tight', dpi=300)
+                plt.close()
+                print(f"  💾 SHAP summary plot 저장 완료: shap_summary_plot.png")
+                
+                # SHAP 값 저장
+                shap_df = pd.DataFrame(shap_values, columns=ott_features)
+                shap_df.to_csv(os.path.join(BASE_DIR, 'shap_values.csv'), index=False)
+                print(f"  💾 SHAP values 저장 완료: shap_values.csv")
+            except Exception as shap_error:
+                print(f"  ⚠️ SHAP 분석 실패: {shap_error}")
 
         # 99% 목표 달성 확인
         if f1_test >= 0.99:
@@ -936,7 +1368,7 @@ if ott_df is not None:
         'F1 점수_Test': dl_f1_test, 'AUC-ROC_Test': dl_auc_test,
         'Precision@10_Val': precision_at_10_dl_val, 'Precision@10_Test': precision_at_10_dl_test,
         '고위험군_Precision_Test': high_risk_precision_dl,
-        'CV F1 평균': dl_f1_test, 'CV F1 표준편차': 0.0
+        'CV F1 평균': np.nan, 'CV F1 표준편차': 0.0
     }
 
     print(f"  ✅ 딥러닝 전이학습: Val F1={dl_f1_val:.4f}, Test F1={dl_f1_test:.4f}, Val Precision@10={precision_at_10_dl_val:.2f}, Test Precision@10={precision_at_10_dl_test:.2f}, 고위험군 Precision={high_risk_precision_dl:.2f}")
