@@ -48,6 +48,7 @@ def get_connection(database: Optional[str] = DB_NAME):
     return mysql.connector.connect(
         host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD,
         database=database, charset="utf8mb4", use_unicode=True,
+        use_pure=True,  # 일부 Windows 환경에서 C 확장이 연결 단계에서 실패하는 문제 회피
     )
 
 
