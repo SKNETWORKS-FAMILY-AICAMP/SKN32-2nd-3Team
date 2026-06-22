@@ -1,307 +1,225 @@
-"""
-페이스 로그인 모듈
-OpenCV + DeepFace 기반 얼굴 인식 인증 시스템
-Streamlit 통합용
-"""
-import os
+"""InsightFace + ArcFace 기반 얼굴 등록/로그인 기능을 담당하는 모듈입니다."""
+
+from pathlib import Path
+from typing import Optional, Tuple
+import secrets
 import cv2
 import numpy as np
-import json
-import base64
-import hashlib
-from pathlib import Path
+from insightface.app import FaceAnalysis
 from datetime import datetime
-import pickle
 
-# Get project root directory
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FACE_DB_PATH = os.path.join(BASE_DIR, 'face_data')
-USER_DB_PATH = os.path.join(BASE_DIR, 'face_data', 'users.json')
-os.makedirs(FACE_DB_PATH, exist_ok=True)
+# DB 연동 모듈
+from db import (
+    create_or_update_user,
+    set_user_face_embedding,
+    user_has_face,
+    get_user_face_embedding,
+    get_all_users_with_embedding,
+    user_exists,
+    get_user_lock_info,
+    update_login_attempt,
+    clear_expired_lock,
+    log_login_attempt,
+    get_connection,  # DB 연결 함수
+    USER_TABLE       # 사용자 테이블명
+)
 
-# ─── 사용자 DB 관리 ───────────────────────────────────────────────────────────
-def load_user_db():
-    if os.path.exists(USER_DB_PATH):
-        with open(USER_DB_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
+# 설정값
+FACE_IMAGE_DIR = Path("registered_faces")
+DEFAULT_SIMILARITY_THRESHOLD = 0.45
+_FACE_APP: Optional[FaceAnalysis] = None
 
-def save_user_db(db):
-    with open(USER_DB_PATH, 'w', encoding='utf-8') as f:
-        json.dump(db, f, ensure_ascii=False, indent=2)
+def get_face_app() -> FaceAnalysis:
+    """InsightFace FaceAnalysis 객체를 초기화하고 반환합니다."""
+    global _FACE_APP
+    if _FACE_APP is not None:
+        return _FACE_APP
+    _FACE_APP = FaceAnalysis(name="buffalo_l")
+    _FACE_APP.prepare(ctx_id=-1, det_size=(640, 640))
+    return _FACE_APP
 
-# ─── 얼굴 감지 (OpenCV Haar Cascade) ─────────────────────────────────────────
-def detect_face_opencv(image_array):
-    """OpenCV Haar Cascade로 얼굴 감지"""
-    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-    face_cascade = cv2.CascadeClassifier(cascade_path)
+def ensure_dirs() -> None:
+    FACE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    if len(image_array.shape) == 3:
-        gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image_array
+def bgr_to_rgb(image_bgr: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
-    faces = face_cascade.detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80)
-    )
-    return faces, gray
+def read_camera_image(camera_file) -> Optional[np.ndarray]:
+    if camera_file is None:
+        return None
+    file_bytes = np.frombuffer(camera_file.getvalue(), dtype=np.uint8)
+    return cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-def extract_face_region(image_array, face_coords=None):
-    """얼굴 영역 추출 및 정규화"""
-    if face_coords is not None and len(face_coords) > 0:
-        x, y, w, h = face_coords[0]
-        # 여백 추가
-        pad = int(min(w, h) * 0.1)
-        x1 = max(0, x - pad)
-        y1 = max(0, y - pad)
-        x2 = min(image_array.shape[1], x + w + pad)
-        y2 = min(image_array.shape[0], y + h + pad)
-        face_region = image_array[y1:y2, x1:x2]
-    else:
-        face_region = image_array
+def detect_largest_face(image_bgr: np.ndarray):
+    app = get_face_app()
+    if image_bgr is None or image_bgr.size == 0:
+        return None, "이미지를 읽을 수 없습니다."
 
-    # 128x128으로 리사이즈
-    face_resized = cv2.resize(face_region, (128, 128))
-    return face_resized
-
-def compute_face_embedding(face_image):
-    """얼굴 임베딩 벡터 계산 (픽셀 기반 간단 특징)"""
-    # 그레이스케일 변환
-    if len(face_image.shape) == 3:
-        gray = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = face_image
-
-    # 히스토그램 균등화
-    gray = cv2.equalizeHist(gray)
-
-    # LBP (Local Binary Pattern) 특징 추출
-    lbp = compute_lbp(gray)
-
-    # HOG 특징 (간단 버전)
-    hog_features = compute_simple_hog(gray)
-
-    # 픽셀 다운샘플링 특징
-    small = cv2.resize(gray, (32, 32)).flatten().astype(np.float32) / 255.0
-
-    # 결합
-    embedding = np.concatenate([lbp, hog_features, small])
-    return embedding
-
-def compute_lbp(gray_image):
-    """Local Binary Pattern 특징"""
-    h, w = gray_image.shape
-    lbp = np.zeros_like(gray_image)
-    for i in range(1, h-1):
-        for j in range(1, w-1):
-            center = gray_image[i, j]
-            code = 0
-            neighbors = [
-                gray_image[i-1, j-1], gray_image[i-1, j], gray_image[i-1, j+1],
-                gray_image[i, j+1], gray_image[i+1, j+1], gray_image[i+1, j],
-                gray_image[i+1, j-1], gray_image[i, j-1]
-            ]
-            for k, n in enumerate(neighbors):
-                if n >= center:
-                    code |= (1 << k)
-            lbp[i, j] = code
-
-    # LBP 히스토그램
-    hist, _ = np.histogram(lbp.ravel(), bins=256, range=(0, 256))
-    hist = hist.astype(np.float32)
-    hist /= (hist.sum() + 1e-7)
-    return hist
-
-def compute_simple_hog(gray_image):
-    """간단한 HOG 특징"""
-    # 그래디언트 계산
-    gx = cv2.Sobel(gray_image, cv2.CV_64F, 1, 0, ksize=3)
-    gy = cv2.Sobel(gray_image, cv2.CV_64F, 0, 1, ksize=3)
-    magnitude = np.sqrt(gx**2 + gy**2)
-    angle = np.arctan2(gy, gx) * 180 / np.pi % 180
-
-    # 8x8 셀로 분할, 9방향 히스토그램
-    cell_size = 16
-    n_cells_x = gray_image.shape[1] // cell_size
-    n_cells_y = gray_image.shape[0] // cell_size
-    hog_features = []
-
-    for cy in range(n_cells_y):
-        for cx in range(n_cells_x):
-            cell_mag = magnitude[cy*cell_size:(cy+1)*cell_size, cx*cell_size:(cx+1)*cell_size]
-            cell_ang = angle[cy*cell_size:(cy+1)*cell_size, cx*cell_size:(cx+1)*cell_size]
-            hist, _ = np.histogram(cell_ang, bins=9, range=(0, 180), weights=cell_mag)
-            hog_features.extend(hist)
-
-    hog_arr = np.array(hog_features, dtype=np.float32)
-    norm = np.linalg.norm(hog_arr) + 1e-7
-    return hog_arr / norm
-
-def cosine_similarity(a, b):
-    """코사인 유사도"""
-    dot = np.dot(a, b)
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-# ─── 사용자 등록 ──────────────────────────────────────────────────────────────
-def register_user(username, role, image_array):
-    """
-    사용자 얼굴 등록
-    Args:
-        username: 사용자 이름
-        role: 역할 (admin/analyst/viewer)
-        image_array: numpy 배열 이미지
-    Returns:
-        (success, message)
-    """
-    db = load_user_db()
-
-    if username in db:
-        return False, f"'{username}' 사용자가 이미 등록되어 있습니다."
-
-    # 얼굴 감지
-    faces, gray = detect_face_opencv(image_array)
+    image_rgb = bgr_to_rgb(image_bgr)
+    faces = app.get(image_rgb)
     if len(faces) == 0:
-        return False, "얼굴을 감지할 수 없습니다. 정면을 향해 다시 시도해 주세요."
-    if len(faces) > 1:
-        return False, "여러 얼굴이 감지되었습니다. 한 명만 나오도록 해주세요."
+        return None, "얼굴을 찾지 못했습니다."
 
-    # 얼굴 임베딩 추출
-    face_img = extract_face_region(image_array, faces)
-    embedding = compute_face_embedding(face_img)
+    largest_face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0]) * (f.bbox[3]-f.bbox[1]))
+    return largest_face, "얼굴 검출 성공"
 
-    # 얼굴 이미지 저장
-    face_path = os.path.join(FACE_DB_PATH, f"{username}_face.jpg")
-    cv2.imwrite(face_path, face_img)
-
-    # 임베딩 저장
-    emb_path = os.path.join(FACE_DB_PATH, f"{username}_embedding.pkl")
-    with open(emb_path, 'wb') as f:
-        pickle.dump(embedding, f)
-
-    # 사용자 DB 업데이트
-    db[username] = {
-        'username': username,
-        'role': role,
-        'face_path': face_path,
-        'embedding_path': emb_path,
-        'registered_at': datetime.now().isoformat(),
-        'last_login': None,
-        'login_count': 0
-    }
-    save_user_db(db)
-
-    return True, f"'{username}' 사용자 등록 완료!"
-
-def authenticate_user(image_array, threshold=0.65):
-    """
-    얼굴 인증
-    Args:
-        image_array: 입력 이미지
-        threshold: 유사도 임계값 (높을수록 엄격)
-    Returns:
-        (success, username, role, similarity, message)
-    """
-    db = load_user_db()
-    if not db:
-        return False, None, None, 0.0, "등록된 사용자가 없습니다. 먼저 얼굴을 등록해 주세요."
-
-    # 얼굴 감지
-    faces, gray = detect_face_opencv(image_array)
-    if len(faces) == 0:
-        return False, None, None, 0.0, "얼굴을 감지할 수 없습니다."
-
-    # 입력 임베딩
-    face_img = extract_face_region(image_array, faces)
-    input_embedding = compute_face_embedding(face_img)
-
-    # 모든 등록 사용자와 비교
-    best_match = None
-    best_similarity = 0.0
-
-    for username, user_info in db.items():
-        emb_path = user_info['embedding_path']
-        if not os.path.exists(emb_path):
-            continue
-        with open(emb_path, 'rb') as f:
-            stored_embedding = pickle.load(f)
-
-        similarity = cosine_similarity(input_embedding, stored_embedding)
-        if similarity > best_similarity:
-            best_similarity = similarity
-            best_match = username
-
-    if best_match and best_similarity >= threshold:
-        # 로그인 기록 업데이트
-        db[best_match]['last_login'] = datetime.now().isoformat()
-        db[best_match]['login_count'] = db[best_match].get('login_count', 0) + 1
-        save_user_db(db)
-
-        role = db[best_match]['role']
-        return True, best_match, role, best_similarity, f"인증 성공! 안녕하세요, {best_match}님"
+def draw_face_contour(image_bgr: np.ndarray, face) -> np.ndarray:
+    """검출된 얼굴에 윤곽선(landmark)을 그려 BGR 이미지로 반환합니다(촬영 결과 확인용, InsightFace 기반)."""
+    annotated = image_bgr.copy()
+    landmarks = getattr(face, "landmark_2d_106", None)
+    if landmarks is not None:
+        for (x, y) in landmarks.astype(int):
+            cv2.circle(annotated, (x, y), 1, (0, 230, 60), -1)
     else:
-        return False, None, None, best_similarity, f"인증 실패 (유사도: {best_similarity:.2%}). 다시 시도해 주세요."
+        x1, y1, x2, y2 = face.bbox.astype(int)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 230, 60), 2)
+        if getattr(face, "kps", None) is not None:
+            for (x, y) in face.kps.astype(int):
+                cv2.circle(annotated, (x, y), 3, (0, 0, 255), -1)
+    return annotated
 
-def get_all_users():
-    """등록된 모든 사용자 목록 반환"""
-    db = load_user_db()
-    return db
+_HAAR_CASCADE: Optional[cv2.CascadeClassifier] = None
 
-def delete_user(username):
-    """사용자 삭제"""
-    db = load_user_db()
-    if username not in db:
-        return False, f"'{username}' 사용자를 찾을 수 없습니다."
+def get_fast_face_detector() -> cv2.CascadeClassifier:
+    """실시간 미리보기용 경량 얼굴 검출기(Haar Cascade). OpenCV에 기본 내장돼 즉시 로딩됩니다."""
+    global _HAAR_CASCADE
+    if _HAAR_CASCADE is None:
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        _HAAR_CASCADE = cv2.CascadeClassifier(cascade_path)
+    return _HAAR_CASCADE
 
-    user = db[username]
-    # 파일 삭제
-    for path_key in ['face_path', 'embedding_path']:
-        if os.path.exists(user.get(path_key, '')):
-            os.remove(user[path_key])
+def draw_fast_face_box(image_bgr: np.ndarray) -> np.ndarray:
+    """실시간 미리보기에서 매 프레임 호출하기 위한 가벼운 얼굴 박스 표시(Haar Cascade)."""
+    annotated = image_bgr.copy()
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    detector = get_fast_face_detector()
+    faces = detector.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(80, 80))
+    for (x, y, w, h) in faces:
+        cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 230, 60), 2)
+    return annotated
 
-    del db[username]
-    save_user_db(db)
-    return True, f"'{username}' 사용자 삭제 완료"
+def extract_embedding(image_bgr: np.ndarray) -> Tuple[Optional[np.ndarray], str]:
+    face, message = detect_largest_face(image_bgr)
+    if face is None:
+        return None, message
 
-# ─── 데모 사용자 생성 ─────────────────────────────────────────────────────────
-def create_demo_users():
-    """데모용 가상 사용자 생성 (실제 얼굴 없이 테스트용)"""
-    db = load_user_db()
-    demo_users = [
-        {'username': 'admin', 'role': 'admin'},
-        {'username': 'analyst1', 'role': 'analyst'},
-        {'username': 'viewer1', 'role': 'viewer'},
-    ]
+    embedding = face.embedding.astype(np.float32)
+    norm = np.linalg.norm(embedding)
+    if norm == 0:
+        return None, "얼굴 특징 벡터를 생성하지 못했습니다."
+    return embedding / norm, "얼굴 특징 추출 성공"
 
-    for user in demo_users:
-        if user['username'] not in db:
-            # 가상 임베딩 생성 (데모용)
-            np.random.seed(hash(user['username']) % 2**32)
-            fake_embedding = np.random.rand(256 + 576 + 1024).astype(np.float32)
-            fake_embedding /= np.linalg.norm(fake_embedding)
+def save_registered_face_image(user_id: str, image_bgr: np.ndarray) -> Path:
+    ensure_dirs()
+    safe_user_id = "".join(ch for ch in user_id if ch.isalnum() or ch in ("_", "-"))
+    image_path = FACE_IMAGE_DIR / f"{safe_user_id}.jpg"
+    cv2.imwrite(str(image_path), image_bgr)
+    return image_path
 
-            emb_path = os.path.join(FACE_DB_PATH, f"{user['username']}_embedding.pkl")
-            with open(emb_path, 'wb') as f:
-                pickle.dump(fake_embedding, f)
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b))
 
-            db[user['username']] = {
-                'username': user['username'],
-                'role': user['role'],
-                'face_path': '',
-                'embedding_path': emb_path,
-                'registered_at': datetime.now().isoformat(),
-                'last_login': None,
-                'login_count': 0,
-                'is_demo': True
-            }
+def register_face(user_id: str, password: str, user_name: str, image_bgr: np.ndarray, role: str = "viewer") -> Tuple[bool, str]:
+    if not all([user_id.strip(), password.strip(), user_name.strip()]):
+        return False, "입력값을 확인하세요."
 
-    save_user_db(db)
-    return True
+    embedding, message = extract_embedding(image_bgr)
+    if embedding is None: return False, message
 
-if __name__ == '__main__':
-    create_demo_users()
-    print("데모 사용자 생성 완료")
-    print(json.dumps(load_user_db(), ensure_ascii=False, indent=2))
+    image_path = save_registered_face_image(user_id, image_bgr)
+    create_or_update_user(user_id.strip(), password, user_name.strip(), embedding, "", role)
+    image_path.unlink(missing_ok=True)
+    return True, f"{user_id} 등록 완료."
+
+def register_user(user_name: str, role: str, image_bgr: np.ndarray) -> Tuple[bool, str]:
+    user_name = user_name.strip()
+    safe_user_id = "".join(ch for ch in user_name if ch.isalnum() or ch in ("_", "-"))
+    user_id = safe_user_id if not user_exists(safe_user_id) else f"{safe_user_id}_{secrets.token_hex(2)}"
+
+    embedding, message = extract_embedding(image_bgr)
+    if embedding is None: return False, message
+
+    create_or_update_user(user_id, secrets.token_hex(16), user_name, embedding, "", role)
+    return True, f"{user_name}님 등록 완료 (ID: {user_id})"
+
+def register_face_for_existing_user(user_id: str, user_name: str, image_bgr: np.ndarray) -> Tuple[bool, str]:
+    """이미 ID/PW가 있는 계정에 얼굴 임베딩만 등록(2차 인증용)합니다."""
+    embedding, message = extract_embedding(image_bgr)
+    if embedding is None:
+        return False, message
+    set_user_face_embedding(user_id, embedding)
+    return True, "얼굴 등록 완료."
+
+def verify_face_for_user(user_id: str, image_bgr: np.ndarray, user_name: Optional[str] = None, threshold: float = DEFAULT_SIMILARITY_THRESHOLD):
+    locked, lock_message = check_lock_status(user_id)
+    if locked:
+        log_login_attempt(user_id, user_name, success=False)
+        return False, 0.0, lock_message
+
+    registered_embedding = get_user_face_embedding(user_id)
+    login_embedding, message = extract_embedding(image_bgr)
+
+    if registered_embedding is None:
+        return False, 0.0, "등록된 얼굴 정보가 없습니다. 얼굴 등록을 먼저 진행하세요."
+
+    if login_embedding is None:
+        update_login_attempt(user_id, success=False)
+        log_login_attempt(user_id, user_name, success=False)
+        return False, 0.0, message
+
+    score = cosine_similarity(login_embedding, registered_embedding)
+    if score >= threshold:
+        update_login_attempt(user_id, success=True)
+        log_login_attempt(user_id, user_name, success=True, similarity=score)
+        return True, score, "인증 성공!"
+    else:
+        update_login_attempt(user_id, success=False)
+        log_login_attempt(user_id, user_name, success=False, similarity=score)
+        return False, score, "얼굴 불일치"
+
+def authenticate_user(image_bgr: np.ndarray, threshold: float = DEFAULT_SIMILARITY_THRESHOLD):
+    login_embedding, message = extract_embedding(image_bgr)
+    if login_embedding is None: return False, None, None, 0.0, message
+
+    users = [u for u in get_all_users_with_embedding() if u["embedding"] is not None]
+    best_user, best_score = None, -1.0
+
+    for user in users:
+        score = cosine_similarity(login_embedding, user["embedding"])
+        if score > best_score:
+            best_score, best_user = score, user
+
+    if best_user is None or best_score < threshold:
+        return False, None, None, best_score, "일치하는 얼굴 없음."
+
+    locked, lock_message = check_lock_status(best_user['user_id'])
+    if locked:
+        log_login_attempt(best_user['user_id'], best_user['user_name'], success=False)
+        return False, None, None, best_score, lock_message
+
+    update_login_attempt(best_user['user_id'], success=True)
+    log_login_attempt(best_user['user_id'], best_user['user_name'], success=True, similarity=best_score)
+    return True, best_user["user_name"], best_user["role"], best_score, "인증 성공."
+
+def is_user_locked(user_id: str) -> bool:
+    """계정 잠금 여부 확인"""
+    locked, _ = check_lock_status(user_id)
+    return locked
+
+def check_lock_status(user_id: str) -> Tuple[bool, str]:
+    """계정 잠금 여부와 남은 잠금 시간을 함께 반환합니다. 잠금 시간이 지났으면 카운터를 초기화합니다."""
+    try:
+        conn = get_connection()
+        with conn.cursor(dictionary=True) as cur:
+            cur.execute(f"SELECT lock_until FROM {USER_TABLE} WHERE user_id = %s", (user_id,))
+            row = cur.fetchone()
+        conn.close()
+
+        if row and row["lock_until"]:
+            if row["lock_until"] > datetime.now():
+                remaining_minutes = max(1, int((row["lock_until"] - datetime.now()).total_seconds() // 60) + 1)
+                return True, f"⚠️ 로그인 시도 초과로 계정이 잠겼습니다. {remaining_minutes}분 후 다시 시도하세요."
+            clear_expired_lock(user_id)
+        return False, ""
+    except Exception:
+        return False, ""

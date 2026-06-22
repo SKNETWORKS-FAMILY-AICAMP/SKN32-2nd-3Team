@@ -129,6 +129,16 @@ tensorboard_logs/
 captured_faces/
 face_dataset/
 temp_images/
+registered_faces/
+face_data/
+
+# =========================
+
+# Face Login - 암호화 키 (절대 공유/커밋 금지)
+
+# =========================
+
+face_embedding.key
 
 # =========================
 

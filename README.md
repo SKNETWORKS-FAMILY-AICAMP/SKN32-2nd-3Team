@@ -50,24 +50,31 @@
 ### 1. 환경 설치
 
 ```bash
-pip install streamlit scikit-learn xgboost lightgbm imbalanced-learn \
-            shap plotly opencv-python-headless tensorflow
+pip install -r requirements.txt
 ```
 
-### 2. 데이터 생성 및 전처리
+### 2. 환경 변수 설정
+
+`.env.example`을 복사해서 `.env`로 만들고, 본인 MySQL 계정 정보를 입력합니다.
+
+```bash
+cp .env.example .env
+```
+
+### 3. 데이터 생성 및 전처리
 
 ```bash
 python3 generate_data.py
 python3 preprocess_eda.py
 ```
 
-### 3. 모델 학습
+### 4. 모델 학습
 
 ```bash
 python3 train_models.py
 ```
 
-### 4. 앱 실행
+### 5. 앱 실행
 
 ```bash
 streamlit run app.py

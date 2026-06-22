@@ -1,0 +1,13 @@
+streamlit
+scikit-learn
+xgboost
+lightgbm
+imbalanced-learn
+shap
+plotly
+opencv-python-headless
+mysql-connector-python
+insightface
+onnxruntime
+cryptography
+python-dotenv
