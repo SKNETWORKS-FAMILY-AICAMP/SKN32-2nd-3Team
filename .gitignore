@@ -104,6 +104,7 @@ models/
 checkpoints/
 weights/
 artifacts/
+mlruns/
 
 *.h5
 *.keras
@@ -161,3 +162,35 @@ desktop.ini
 *.bak
 *.swp
 *~
+
+# =========================
+
+# Project Specific - Generated Files
+
+# =========================
+
+# Model training artifacts
+ml/catboost_info/
+ml/mlflow_visualization.py
+ml/code_detail.txt
+ml/use_ml_history.txt
+ml/feature_importance_top30.csv
+ml/shap_values.csv
+ml/shap_summary_plot.png
+
+# Generated visualization assets
+assets/*.png
+assets/*.csv
+!assets/correlation_heatmap.png
+!assets/eda_overview.png
+!assets/feature_importance.png
+!assets/model_results.png
+
+# Generated data files
+data/ott_model_results.json
+data/before/sns_*.csv
+data/ott_data_v.0/
+data/ott_data_v.2/
+
+# MLflow database (in root)
+mlflow.db
