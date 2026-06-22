@@ -29,7 +29,7 @@ from catboost import CatBoostClassifier
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, confusion_matrix, roc_curve, classification_report,
-    precision_recall_curve
+    precision_recall_curve, average_precision_score
 )
 from sklearn.model_selection import cross_val_score, StratifiedKFold, GridSearchCV, RandomizedSearchCV, train_test_split
 from imblearn.over_sampling import SMOTE, ADASYN
@@ -52,10 +52,11 @@ for f in fm.findSystemFonts():
 plt.rcParams['axes.unicode_minus'] = False
 
 # ─── OTT/SNS 데이터 로드 및 전처리 ────────────────────────────────────────────────
+# OTT 데이터(ott_money, ott_time, ott_usage_01, ott_usage_02)를 로드하고
+# 사용자별 특성을 추출하여 이탈 예측 모델 학습용 데이터셋을 생성
 def load_ott_sns_data():
-    """OTT 및 SNS 데이터 로드 및 통합"""
     print("=" * 60)
-    print("OTT/SNS 데이터 로드")
+    print("OTT 데이터 로드")
     print("=" * 60)
     
     # OTT 데이터 로드
@@ -65,26 +66,19 @@ def load_ott_sns_data():
         ott_usage_01 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_usage_01.csv'))
         ott_usage_02 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'ott_usage_02.csv'))
         print(f"✅ OTT 데이터 로드 완료")
+        print(ott_money.shape)
+        print(ott_time.shape)
+        print(ott_usage_01.shape)
+        print(ott_usage_02.shape)
     except Exception as e:
         print(f"❌ OTT 데이터 로드 실패: {e}")
-        return None, None
-    
-    # SNS 데이터 로드
-    try:
-        sns_time = pd.read_csv(os.path.join(BASE_DIR, 'data', 'sns_time.csv'))
-        sns_usage_01 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'sns_usage_01.csv'))
-        sns_usage_02 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'sns_usage_02.csv'))
-        sns_usage_03 = pd.read_csv(os.path.join(BASE_DIR, 'data', 'sns_usage_03.csv'))
-        print(f"✅ SNS 데이터 로드 완료")
-    except Exception as e:
-        print(f"❌ SNS 데이터 로드 실패: {e}")
         return None, None
 
     # OTT 데이터 전처리
     ott_df = preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02)
 
-    # SNS 데이터 전처리
-    sns_df = preprocess_sns_data(sns_time, sns_usage_01, sns_usage_02, sns_usage_03)
+    # SNS 데이터는 사용하지 않음
+    sns_df = None
 
     return ott_df, sns_df
 
@@ -633,8 +627,22 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
         user_features.append(features)
 
     ott_df = pd.DataFrame(user_features)
+    original_users = len(all_users)
+    processed_users = ott_df.shape[0]
+    data_loss = original_users - processed_users
+    data_loss_rate = (data_loss / original_users * 100) if original_users > 0 else 0
+    
     print(f"✅ OTT 데이터 전처리 완료: {ott_df.shape}")
-    print(f"📊 데이터 손실: 원본 {len(all_users)}명 → 전처리 후 {ott_df.shape[0]}명 (손실: {len(all_users) - ott_df.shape[0]}명, {((len(all_users) - ott_df.shape[0]) / len(all_users) * 100):.1f}%)")
+    print(f"📊 데이터 손실: 원본 {original_users}명 → 전처리 후 {processed_users}명 (손실: {data_loss}명, {data_loss_rate:.1f}%)")
+    
+    # 데이터 손실 정보 저장 (전역 변수로 저장)
+    global preprocessing_stats
+    preprocessing_stats = {
+        'original_users': original_users,
+        'processed_users': processed_users,
+        'data_loss': data_loss,
+        'data_loss_rate': data_loss_rate
+    }
     
     # 데이터 누수 방지 feature 확인
     if 'ott_time_last_year_ratio_safe' in ott_df.columns:
@@ -661,93 +669,9 @@ def preprocess_ott_data(ott_money, ott_time, ott_usage_01, ott_usage_02):
     
     return ott_df
 
-def preprocess_sns_data(sns_time, sns_usage_01, sns_usage_02, sns_usage_03):
-    """SNS 데이터 전처리 및 특성 추출"""
-    print("📊 SNS 데이터 전처리 중...")
-
-    # sns_time: OPID별 시간 데이터
-    time_dict = sns_time.groupby('OPID').agg({
-        'OTT 서비스 주중 이용 시간(분 기준 환산)': 'mean',
-        'OTT 서비스 주말 이용 시간(분 기준 환산)': 'mean'
-    }).to_dict('index')
-
-    # sns_usage: 연도별 사용 패턴 데이터
-    usage_01_data = sns_usage_01.set_index('YEAR')
-    usage_02_data = sns_usage_02.set_index('YEAR')
-    usage_03_data = sns_usage_03.set_index('YEAR')
-
-    # 사용자별 특성 추출
-    user_features = []
-
-    # 모든 사용자 ID 추출
-    all_users = set()
-    for col in usage_01_data.columns:
-        if col != 'YEAR':
-            all_users.add(col)
-
-    for user_id in list(all_users)[:1000]:  # 샘플링 (메모리 관리)
-        features = {'user_id': user_id}
-
-        # 시간 정보
-        if user_id in time_dict:
-            features['sns_weekday_time'] = time_dict[user_id].get('OTT 서비스 주중 이용 시간(분 기준 환산)', 0)
-            features['sns_weekend_time'] = time_dict[user_id].get('OTT 서비스 주말 이용 시간(분 기준 환산)', 0)
-            features['sns_total_time'] = features['sns_weekday_time'] + features['sns_weekend_time']
-        else:
-            features.update({'sns_weekday_time': 0, 'sns_weekend_time': 0, 'sns_total_time': 0})
-
-        # 사용 패턴 특성 (sns_usage)
-        if user_id in usage_01_data.columns:
-            user_usage_01 = usage_01_data[user_id].dropna()
-            if len(user_usage_01) > 0:
-                features['sns_usage_01_mean'] = user_usage_01.mean()
-                features['sns_usage_01_std'] = user_usage_01.std()
-                features['sns_usage_01_trend'] = user_usage_01.iloc[-1] - user_usage_01.iloc[0] if len(user_usage_01) > 1 else 0
-            else:
-                features.update({'sns_usage_01_mean': 0, 'sns_usage_01_std': 0, 'sns_usage_01_trend': 0})
-        else:
-            features.update({'sns_usage_01_mean': 0, 'sns_usage_01_std': 0, 'sns_usage_01_trend': 0})
-
-        if user_id in usage_02_data.columns:
-            user_usage_02 = usage_02_data[user_id].dropna()
-            if len(user_usage_02) > 0:
-                features['sns_usage_02_mean'] = user_usage_02.mean()
-                features['sns_usage_02_std'] = user_usage_02.std()
-                features['sns_usage_02_trend'] = user_usage_02.iloc[-1] - user_usage_02.iloc[0] if len(user_usage_02) > 1 else 0
-            else:
-                features.update({'sns_usage_02_mean': 0, 'sns_usage_02_std': 0, 'sns_usage_02_trend': 0})
-        else:
-            features.update({'sns_usage_02_mean': 0, 'sns_usage_02_std': 0, 'sns_usage_02_trend': 0})
-
-        if user_id in usage_03_data.columns:
-            user_usage_03 = usage_03_data[user_id].dropna()
-            if len(user_usage_03) > 0:
-                features['sns_usage_03_mean'] = user_usage_03.mean()
-                features['sns_usage_03_std'] = user_usage_03.std()
-                features['sns_usage_03_trend'] = user_usage_03.iloc[-1] - user_usage_03.iloc[0] if len(user_usage_03) > 1 else 0
-            else:
-                features.update({'sns_usage_03_mean': 0, 'sns_usage_03_std': 0, 'sns_usage_03_trend': 0})
-        else:
-            features.update({'sns_usage_03_mean': 0, 'sns_usage_03_std': 0, 'sns_usage_03_trend': 0})
-
-        # 이탈 라벨 생성 (데이터 누수 방지를 위해 다른 기준 사용)
-        # 전체 사용 시간이 낮고 감소하는 경우를 이탈로 정의
-        total_usage = features.get('sns_usage_01_mean', 0) + features.get('sns_usage_02_mean', 0)
-        # 기준을 완화하여 더 많은 이탈 케이스 생성
-        if total_usage < 20 and features.get('sns_usage_01_trend', 0) < 0:
-            features['churn'] = 1
-        else:
-            features['churn'] = 0
-
-        user_features.append(features)
-
-    sns_df = pd.DataFrame(user_features)
-    print(f"✅ SNS 데이터 전처리 완료: {sns_df.shape}")
-    return sns_df
-
 # ─── 데이터 로드 및 전처리 ──────────────────────────────────────────────────────
 # OTT 데이터 로드
-ott_df, sns_df = load_ott_sns_data()
+ott_df, _ = load_ott_sns_data()
 
 if ott_df is None:
     print("❌ OTT 데이터 로드 실패, 기존 데이터 사용 시도...")
@@ -774,16 +698,6 @@ else:
     X_ott = ott_df[ott_features].fillna(0)
     y_ott = ott_df['churn']
 
-    # SNS 데이터로 모델 학습 준비 (주석 처리)
-    # print("\n" + "=" * 60)
-    # print("SNS 데이터로 모델 학습 준비")
-    # print("=" * 60)
-
-    # # 특성 선택 (데이터 누수 방지를 위해 trend 특성 제거)
-    # sns_features = [col for col in sns_df.columns if col not in ['user_id', 'churn'] and 'trend' not in col]
-    # X_sns = sns_df[sns_features].fillna(0)
-    # y_sns = sns_df['churn']
-
     # OTT 데이터 분할 (Train 60%, Validation 20%, Test 20%)
     try:
         X_ott_temp, X_ott_test, y_ott_temp, y_ott_test = train_test_split(
@@ -802,37 +716,16 @@ else:
             X_ott_temp, y_ott_temp, test_size=0.25, random_state=42
         )
 
-    # SNS 데이터 분할 (주석 처리)
-    # try:
-    #     X_sns_temp, X_sns_test, y_sns_temp, y_sns_test = train_test_split(
-    #         X_sns, y_sns, test_size=0.2, random_state=42, stratify=y_sns
-    #     )
-    #     X_sns_train, X_sns_val, y_sns_train, y_sns_val = train_test_split(
-    #         X_sns_temp, y_sns_temp, test_size=0.25, random_state=42, stratify=y_sns_temp
-    #     )
-    # except ValueError as e:
-    #     print(f"⚠️ SNS stratified split 실패: {e}")
-    #     print("  일반 split로 대체...")
-    #     X_sns_temp, X_sns_test, y_sns_temp, y_sns_test = train_test_split(
-    #         X_sns, y_sns, test_size=0.2, random_state=42
-    #     )
-    #     X_sns_train, X_sns_val, y_sns_train, y_sns_val = train_test_split(
-    #         X_sns_temp, y_sns_temp, test_size=0.25, random_state=42
-    #     )
-
     print(f"OTT 학습 데이터: {X_ott_train.shape}, 검증 데이터: {X_ott_val.shape}, 테스트 데이터: {X_ott_test.shape}")
-    # print(f"SNS 학습 데이터: {X_sns_train.shape}, 검증 데이터: {X_sns_val.shape}, 테스트 데이터: {X_sns_test.shape}")
 
     # 라벨 분포 확인
     print("\n📊 라벨 분포 확인:")
     print(f"OTT Train 라벨 분포: {pd.Series(y_ott_train).value_counts().to_dict()}")
     print(f"OTT Val 라벨 분포: {pd.Series(y_ott_val).value_counts().to_dict()}")
     print(f"OTT Test 라벨 분포: {pd.Series(y_ott_test).value_counts().to_dict()}")
-    # print(f"SNS Train 라벨 분포: {pd.Series(y_sns_train).value_counts().to_dict()}")
-    # print(f"SNS Val 라벨 분포: {pd.Series(y_sns_val).value_counts().to_dict()}")
-    # print(f"SNS Test 라벨 분포: {pd.Series(y_sns_test).value_counts().to_dict()}")
 
 # NaN 처리 및 스케일링 함수
+# 결측치 처리, 표준화, 특성 선택을 수행하여 모델 학습용 데이터를 전처리
 def preprocess_data(X_train, X_val, X_test, y_train):
     """데이터 전처리: 결측치 처리, 스케일링, 특성 선택"""
     from sklearn.impute import SimpleImputer
@@ -874,7 +767,6 @@ def preprocess_data(X_train, X_val, X_test, y_train):
 # 데이터 전처리 적용
 if ott_df is not None:
     X_ott_train_proc, X_ott_val_proc, X_ott_test_proc, ott_features, ott_scaler, ott_selector = preprocess_data(X_ott_train, X_ott_val, X_ott_test, y_ott_train)
-    # X_sns_train_proc, X_sns_val_proc, X_sns_test_proc, sns_features, sns_scaler, sns_selector = preprocess_data(X_sns_train, X_sns_val, X_sns_test, y_sns_train)
 
     # SMOTE 오버샘플링 (클래스 불균형 처리) - n_neighbors 조정
     # SMOTE는 학습 데이터에만 적용, 검증/테스트 데이터는 원본 유지
@@ -902,31 +794,6 @@ if ott_df is not None:
             print("  오버샘플링 없이 진행...")
             X_ott_train_sm, y_ott_train_sm = X_ott_train_proc, y_ott_train
             print(f"OTT 학습 데이터: {X_ott_train_sm.shape}, 이탈 비율: {y_ott_train_sm.mean():.2%}")
-
-    # SNS SMOTE 오버샘플링 (주석 처리)
-    # try:
-    #     min_class_sns = min(np.sum(y_sns_train == 0), np.sum(y_sns_train == 1))
-    #     n_neighbors_sns = min(5, min_class_sns - 1) if min_class_sns > 1 else 1
-    #     n_neighbors_sns = max(1, int(n_neighbors_sns))
-    #
-    #     smote_tomek_sns = SMOTETomek(random_state=42, smote__k_neighbors=n_neighbors_sns)
-    #     X_sns_train_sm, y_sns_train_sm = smote_tomek_sns.fit_resample(X_sns_train_proc, y_sns_train)
-    #     print(f"SMOTE-Tomek 후 SNS 학습 데이터: {X_sns_train_sm.shape}, 이탈 비율: {y_sns_train_sm.mean():.2%}")
-    # except Exception as e:
-    #     print(f"⚠️ SMOTE-Tomek 실패 (SNS): {e}")
-    #     print("  일반 SMOTE로 대체...")
-    #     min_class_sns = min(np.sum(y_sns_train == 0), np.sum(y_sns_train == 1))
-    #     n_neighbors_sns = min(3, min_class_sns - 1) if min_class_sns > 1 else 1
-    #     n_neighbors_sns = max(1, int(n_neighbors_sns))
-    #     try:
-    #         smote = SMOTE(random_state=42, k_neighbors=n_neighbors_sns)
-    #         X_sns_train_sm, y_sns_train_sm = smote.fit_resample(X_sns_train_proc, y_sns_train)
-    #         print(f"SMOTE 후 SNS 학습 데이터: {X_sns_train_sm.shape}, 이탈 비율: {y_sns_train_sm.mean():.2%}")
-    #     except Exception as e2:
-    #         print(f"⚠️ SMOTE도 실패 (SNS): {e2}")
-    #         print("  오버샘플링 없이 진행...")
-    #         X_sns_train_sm, y_sns_train_sm = X_sns_train_proc, y_sns_train
-    #         print(f"SNS 학습 데이터: {X_sns_train_sm.shape}, 이탈 비율: {y_sns_train_sm.mean():.2%}")
 else:
     # 기존 데이터 전처리
     X_train_proc, X_test_proc, features, scaler, selector = preprocess_data(X_train, X_test, y_train)
@@ -942,6 +809,7 @@ else:
         print(f"SMOTE 후 학습 데이터: {X_train_sm.shape}, 이탈 비율: {y_train_sm.mean():.2%}")
 
 # ─── 전이학습 기반 고성능 모델 정의 ─────────────────────────────────────────────
+# XGBoost를 기반으로 한 고성능 앙상블 모델을 정의 (전이학습 개념 적용)
 def create_advanced_models():
     """고성능 앙상블 모델 생성 (전이학습 기반)"""
 
@@ -953,28 +821,29 @@ def create_advanced_models():
             use_label_encoder=False, eval_metric='logloss',
             random_state=42, verbosity=0, n_jobs=-1
         ),
-        # 'LightGBM_Tuned': LGBMClassifier(
-        #     n_estimators=300, max_depth=8, learning_rate=0.05,
-        #     subsample=0.8, colsample_bytree=0.8,
-        #     random_state=42, verbose=-1, n_jobs=-1
-        # ),
-        # 'CatBoost_Tuned': CatBoostClassifier(
-        #     iterations=300, depth=8, learning_rate=0.05,
-        #     random_state=42, verbose=False
-        # ),
-        # 'RandomForest_Tuned': RandomForestClassifier(
-        #     n_estimators=200, max_depth=12, min_samples_split=5,
-        #     min_samples_leaf=2, random_state=42, n_jobs=-1
-        # ),
-        # 'GradientBoosting_Tuned': GradientBoostingClassifier(
-        #     n_estimators=200, max_depth=8, learning_rate=0.05,
-        #     subsample=0.8, random_state=42
-        # ),
+        'LightGBM_Tuned': LGBMClassifier(
+            n_estimators=300, max_depth=8, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8,
+            random_state=42, verbose=-1, n_jobs=-1
+        ),
+        'CatBoost_Tuned': CatBoostClassifier(
+            iterations=300, depth=8, learning_rate=0.05,
+            random_state=42, verbose=False
+        ),
+    #     'RandomForest_Tuned': RandomForestClassifier(
+    #         n_estimators=200, max_depth=12, min_samples_split=5,
+    #         min_samples_leaf=2, random_state=42, n_jobs=-1
+    #     ),
+    #     'GradientBoosting_Tuned': GradientBoostingClassifier(
+    #         n_estimators=200, max_depth=8, learning_rate=0.05,
+    #         subsample=0.8, random_state=42
+    #     ),
     }
 
     return base_models
 
 # ─── 딥러닝 전이학습 모델 ─────────────────────────────────────────────────────
+# Residual Block과 Batch Normalization을 활용한 고성능 딥러닝 모델 정의
 def create_transfer_learning_model(input_dim):
     """전이학습 기반 딥러닝 모델 생성"""
 
@@ -1109,12 +978,20 @@ print("=" * 60)
 # 모델 결과 저장용 딕셔너리
 model_results = {
     'OTT': {}
-    # 'SNS': {}  # SNS 주석 처리
 }
 
 # ─── 1. OTT 모델 학습 (이탈예측 + TOP10) ────────────────────────────────────────────
 print("\n🎯 [1/1] OTT 모델 학습 (이탈예측 + TOP10)")
 print("-" * 60)
+
+# Confusion Matrix 저장용 전역 변수 초기화
+confusion_matrices = {}
+y_prob_val_dict = {}
+y_prob_test_dict = {}
+roc_curves_dict = {}
+pr_curves_dict = {}
+threshold_f1_curves_dict = {}
+risk_distribution_dict = {}
 
 if ott_df is not None:
     # 고성능 기본 모델 생성
@@ -1161,6 +1038,9 @@ if ott_df is not None:
         rec_val = recall_score(y_ott_val, y_pred_val, zero_division=0)
         f1_val = f1_score(y_ott_val, y_pred_val, zero_division=0)
         auc_val = roc_auc_score(y_ott_val, y_prob_val) if y_prob_val is not None else 0.0
+        
+        # Confusion Matrix 계산
+        cm_val = confusion_matrix(y_ott_val, y_pred_val)
 
         # 검증 데이터 TOP10 추출
         if y_prob_val is not None:
@@ -1182,6 +1062,9 @@ if ott_df is not None:
         rec_test = recall_score(y_ott_test, y_pred_test, zero_division=0)
         f1_test = f1_score(y_ott_test, y_pred_test, zero_division=0)
         auc_test = roc_auc_score(y_ott_test, y_prob_test) if y_prob_test is not None else 0.0
+        
+        # Confusion Matrix 계산
+        cm_test = confusion_matrix(y_ott_test, y_pred_test)
 
         # Threshold 최적화 (XGBoost 또는 Ensemble만)
         best_threshold = 0.5
@@ -1256,6 +1139,60 @@ if ott_df is not None:
             'CV F1 평균': cv_scores.mean(), 'CV F1 표준편차': cv_scores.std(),
             '최적_Threshold': best_threshold, '최적_F1_Threshold': best_f1_threshold
         }
+        
+        # Confusion Matrix 저장
+        confusion_matrices[f"OTT_{name}_val"] = cm_val.tolist()
+        confusion_matrices[f"OTT_{name}_test"] = cm_test.tolist()
+        
+        # 예측 확률 저장
+        if y_prob_val is not None:
+            y_prob_val_dict[f"OTT_{name}"] = y_prob_val.tolist()
+        if y_prob_test is not None:
+            y_prob_test_dict[f"OTT_{name}"] = y_prob_test.tolist()
+        
+        # ROC Curve 데이터 저장
+        
+        if y_prob_test is not None:
+            # ROC Curve 계산
+            fpr, tpr, _ = roc_curve(y_ott_test, y_prob_test)
+            roc_curves_dict[f"OTT_{name}"] = {
+                'fpr': fpr.tolist(),
+                'tpr': tpr.tolist(),
+                'auc': auc_test
+            }
+            
+            # Precision-Recall Curve 계산
+            precision, recall, _ = precision_recall_curve(y_ott_test, y_prob_test)
+            pr_curves_dict[f"OTT_{name}"] = {
+                'precision': precision.tolist(),
+                'recall': recall.tolist(),
+                'ap': average_precision_score(y_ott_test, y_prob_test)
+            }
+            
+            # Threshold-F1 Curve 데이터 저장
+            thresholds = np.arange(0.1, 1.0, 0.05)
+            f1_scores = []
+            for threshold in thresholds:
+                y_pred_threshold = (y_prob_test >= threshold).astype(int)
+                f1 = f1_score(y_ott_test, y_pred_threshold, zero_division=0)
+                f1_scores.append(f1)
+            
+            threshold_f1_curves_dict[f"OTT_{name}"] = {
+                'thresholds': thresholds.tolist(),
+                'f1_scores': f1_scores,
+                'best_threshold': best_threshold,
+                'best_f1': best_f1_threshold
+            }
+            
+            # Risk Distribution 데이터 저장
+            risk_distribution_dict[f"OTT_{name}"] = {
+                'churn_probs': y_prob_test.tolist(),
+                'risk_categories': {
+                    'low': int(np.sum(y_prob_test < 0.3)),
+                    'medium': int(np.sum((y_prob_test >= 0.3) & (y_prob_test < 0.7))),
+                    'high': int(np.sum(y_prob_test >= 0.7))
+                }
+            }
 
         print(f"  ✅ {name}: Val F1={f1_val:.4f}, Test F1={f1_test:.4f}, Val Precision@10={precision_at_10_val:.2f}, Test Precision@10={precision_at_10_test:.2f}, 고위험군 Precision={high_risk_precision:.2f}")
 
@@ -1274,8 +1211,8 @@ if ott_df is not None:
             
             # TOP30 저장
             top30_df = importance_df.head(30)
-            top30_df.to_csv(os.path.join(BASE_DIR, 'feature_importance_top30.csv'), index=False)
-            print(f"  💾 Feature Importance TOP30 저장 완료: feature_importance_top30.csv")
+            top30_df.to_csv(os.path.join(BASE_DIR, 'ml', 'feature_importance_top30.csv'), index=False)
+            print(f"  💾 Feature Importance TOP30 저장 완료: ml/feature_importance_top30.csv")
             
             # SHAP 분석 (XGBoost만)
             print(f"  🔍 {name} SHAP 분석 중...")
@@ -1286,14 +1223,14 @@ if ott_df is not None:
                 # SHAP summary plot 저장
                 plt.figure(figsize=(10, 8))
                 shap.summary_plot(shap_values, X_ott_test_proc, feature_names=ott_features, show=False)
-                plt.savefig(os.path.join(BASE_DIR, 'shap_summary_plot.png'), bbox_inches='tight', dpi=300)
+                plt.savefig(os.path.join(BASE_DIR, 'ml', 'shap_summary_plot.png'), bbox_inches='tight', dpi=300)
                 plt.close()
-                print(f"  💾 SHAP summary plot 저장 완료: shap_summary_plot.png")
+                print(f"  💾 SHAP summary plot 저장 완료: ml/shap_summary_plot.png")
                 
                 # SHAP 값 저장
                 shap_df = pd.DataFrame(shap_values, columns=ott_features)
-                shap_df.to_csv(os.path.join(BASE_DIR, 'shap_values.csv'), index=False)
-                print(f"  💾 SHAP values 저장 완료: shap_values.csv")
+                shap_df.to_csv(os.path.join(BASE_DIR, 'ml', 'shap_values.csv'), index=False)
+                print(f"  💾 SHAP values 저장 완료: ml/shap_values.csv")
             except Exception as shap_error:
                 print(f"  ⚠️ SHAP 분석 실패: {shap_error}")
 
@@ -1326,6 +1263,9 @@ if ott_df is not None:
     dl_rec_val = recall_score(y_ott_val, y_pred_dl_val, zero_division=0)
     dl_f1_val = f1_score(y_ott_val, y_pred_dl_val, zero_division=0)
     dl_auc_val = roc_auc_score(y_ott_val, y_prob_dl_val)
+    
+    # Confusion Matrix 계산
+    dl_cm_val = confusion_matrix(y_ott_val, y_pred_dl_val)
 
     # 검증 데이터 TOP10 추출
     val_indices = X_ott_val.index if hasattr(X_ott_val, 'index') else range(len(y_prob_dl_val))
@@ -1346,6 +1286,9 @@ if ott_df is not None:
     dl_rec_test = recall_score(y_ott_test, y_pred_dl_test, zero_division=0)
     dl_f1_test = f1_score(y_ott_test, y_pred_dl_test, zero_division=0)
     dl_auc_test = roc_auc_score(y_ott_test, y_prob_dl_test)
+    
+    # Confusion Matrix 계산
+    dl_cm_test = confusion_matrix(y_ott_test, y_pred_dl_test)
 
     # 테스트 데이터 TOP10 추출
     test_indices = X_ott_test.index if hasattr(X_ott_test, 'index') else range(len(y_prob_dl_test))
@@ -1369,6 +1312,57 @@ if ott_df is not None:
         'Precision@10_Val': precision_at_10_dl_val, 'Precision@10_Test': precision_at_10_dl_test,
         '고위험군_Precision_Test': high_risk_precision_dl,
         'CV F1 평균': np.nan, 'CV F1 표준편차': 0.0
+    }
+    
+    # Confusion Matrix 저장
+    confusion_matrices[f"OTT_DeepLearning_Transfer_val"] = dl_cm_val.tolist()
+    confusion_matrices[f"OTT_DeepLearning_Transfer_test"] = dl_cm_test.tolist()
+    
+    # 예측 확률 저장
+    y_prob_val_dict[f"OTT_DeepLearning_Transfer"] = y_prob_dl_val.tolist()
+    y_prob_test_dict[f"OTT_DeepLearning_Transfer"] = y_prob_dl_test.tolist()
+    
+    # ROC Curve 데이터 저장
+    
+    # ROC Curve 계산
+    fpr_dl, tpr_dl, _ = roc_curve(y_ott_test, y_prob_dl_test)
+    roc_curves_dict[f"OTT_DeepLearning_Transfer"] = {
+        'fpr': fpr_dl.tolist(),
+        'tpr': tpr_dl.tolist(),
+        'auc': dl_auc_test
+    }
+    
+    # Precision-Recall Curve 계산
+    precision_dl, recall_dl, _ = precision_recall_curve(y_ott_test, y_prob_dl_test)
+    pr_curves_dict[f"OTT_DeepLearning_Transfer"] = {
+        'precision': precision_dl.tolist(),
+        'recall': recall_dl.tolist(),
+        'ap': average_precision_score(y_ott_test, y_prob_dl_test)
+    }
+    
+    # Threshold-F1 Curve 데이터 저장
+    thresholds_dl = np.arange(0.1, 1.0, 0.05)
+    f1_scores_dl = []
+    for threshold in thresholds_dl:
+        y_pred_threshold_dl = (y_prob_dl_test >= threshold).astype(int)
+        f1_dl = f1_score(y_ott_test, y_pred_threshold_dl, zero_division=0)
+        f1_scores_dl.append(f1_dl)
+    
+    threshold_f1_curves_dict[f"OTT_DeepLearning_Transfer"] = {
+        'thresholds': thresholds_dl.tolist(),
+        'f1_scores': f1_scores_dl,
+        'best_threshold': 0.5,
+        'best_f1': dl_f1_test
+    }
+    
+    # Risk Distribution 데이터 저장
+    risk_distribution_dict[f"OTT_DeepLearning_Transfer"] = {
+        'churn_probs': y_prob_dl_test.tolist(),
+        'risk_categories': {
+            'low': int(np.sum(y_prob_dl_test < 0.3)),
+            'medium': int(np.sum((y_prob_dl_test >= 0.3) & (y_prob_dl_test < 0.7))),
+            'high': int(np.sum(y_prob_dl_test >= 0.7))
+        }
     }
 
     print(f"  ✅ 딥러닝 전이학습: Val F1={dl_f1_val:.4f}, Test F1={dl_f1_test:.4f}, Val Precision@10={precision_at_10_dl_val:.2f}, Test Precision@10={precision_at_10_dl_test:.2f}, 고위험군 Precision={high_risk_precision_dl:.2f}")
@@ -1394,221 +1388,15 @@ if ott_df is not None:
     ott_top10 = ott_test_df.head(10)
     ott_top10.to_csv(os.path.join(BASE_DIR, 'assets', 'ott_top10_customers.csv'), index=False, encoding='utf-8-sig')
     print(f"  📊 OTT TOP10 고객 저장 완료: assets/ott_top10_customers.csv")
+    
+    # TOP10 데이터를 visualization_data에 저장
+    ott_top10_dict = ott_top10.to_dict(orient='records')
 else:
     print("  ⚠️ OTT 데이터 없음, 건너뜀")
-
-# ─── 2. SNS 모델 학습 (이탈예측 + TOP10) ────────────────────────────────────────────
-# print("\n🎯 [2/2] SNS 모델 학습 (이탈예측 + TOP10)")
-# print("-" * 60)
-
-# if sns_df is not None:
-#     # 고성능 기본 모델 생성
-#     sns_base_models = create_advanced_models()
-#
-#     # 앙상블 모델 생성
-#     sns_ensemble = create_ensemble_model(sns_base_models)
-#
-#     # 스태킹 모델 생성
-#     sns_stacking = create_stacking_model(sns_base_models)
-#
-#     # 모델 학습 및 평가
-#     sns_models_to_train = {
-#         **sns_base_models,
-#         'Ensemble': sns_ensemble,
-#         'Stacking': sns_stacking
-#     }
-#
-#     sns_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-#
-#     for name, model in sns_models_to_train.items():
-#         print(f"  🔄 {name} 학습 중...")
-#         try:
-#             model.fit(X_sns_train_sm, y_sns_train_sm)
-#         except Exception as fit_error:
-#             print(f"  ⚠️ {name} 학습 실패: {fit_error}")
-#             print(f"  ⚠️ 단일 클래스 데이터 문제로 건너뜀")
-#             model_results['SNS'][name] = {
-#                 '정확도_Val': 0.0, '정밀도_Val': 0.0, '재현율_Val': 0.0,
-#                 'F1 점수_Val': 0.0, 'AUC-ROC_Val': 0.0,
-#                 '정확도_Test': 0.0, '정밀도_Test': 0.0, '재현율_Test': 0.0,
-#                 'F1 점수_Test': 0.0, 'AUC-ROC_Test': 0.0,
-#                 'Precision@10_Val': 0.0, 'Precision@10_Test': 0.0,
-#                 'CV F1 평균': np.nan, 'CV F1 표준편차': 0.0
-#             }
-#             continue
-#
-#         # 검증 데이터 평가 (이탈예측)
-#         y_pred_val = model.predict(X_sns_val_proc)
-#         y_prob_val = model.predict_proba(X_sns_val_proc)[:, 1] if hasattr(model, 'predict_proba') else None
-#
-#         acc_val = accuracy_score(y_sns_val, y_pred_val)
-#         prec_val = precision_score(y_sns_val, y_pred_val, zero_division=0)
-#         rec_val = recall_score(y_sns_val, y_pred_val, zero_division=0)
-#         f1_val = f1_score(y_sns_val, y_pred_val, zero_division=0)
-#         auc_val = roc_auc_score(y_sns_val, y_prob_val) if y_prob_val is not None else 0.0
-#
-#         # 검증 데이터 TOP10 추출
-#         if y_prob_val is not None:
-#             val_indices = X_sns_val.index if hasattr(X_sns_val, 'index') else range(len(y_prob_val))
-#             val_df = sns_df.iloc[val_indices].copy()
-#             val_df['churn_prob'] = y_prob_val
-#             val_df = val_df.sort_values('churn_prob', ascending=False)
-#
-#             top10_risk_val = val_df.head(10)
-#             actual_churn_in_top10_val = top10_risk_val['churn'].sum()
-#             precision_at_10_val = actual_churn_in_top10_val / 10
-#
-#         # 테스트 데이터 평가 (이탈예측)
-#         y_pred_test = model.predict(X_sns_test_proc)
-#         y_prob_test = model.predict_proba(X_sns_test_proc)[:, 1] if hasattr(model, 'predict_proba') else None
-#
-#         acc_test = accuracy_score(y_sns_test, y_pred_test)
-#         prec_test = precision_score(y_sns_test, y_pred_test, zero_division=0)
-#         rec_test = recall_score(y_sns_test, y_pred_test, zero_division=0)
-#         f1_test = f1_score(y_sns_test, y_pred_test, zero_division=0)
-#         auc_test = roc_auc_score(y_sns_test, y_prob_test) if y_prob_test is not None else 0.0
-#
-#         # 테스트 데이터 TOP10 추출
-#         if y_prob_test is not None:
-#             test_indices = X_sns_test.index if hasattr(X_sns_test, 'index') else range(len(y_prob_test))
-#             test_df = sns_df.iloc[test_indices].copy()
-#             test_df['churn_prob'] = y_prob_test
-#             test_df = test_df.sort_values('churn_prob', ascending=False)
-#
-#             top10_risk_test = test_df.head(10)
-#             actual_churn_in_top10_test = top10_risk_test['churn'].sum()
-#             precision_at_10_test = actual_churn_in_top10_test / 10
-#
-#             # 고위험군 식별 (확률 > 0.7)
-#             high_risk_test = test_df[test_df['churn_prob'] > 0.7]
-#             high_risk_precision = high_risk_test['churn'].sum() / len(high_risk_test) if len(high_risk_test) > 0 else 0.0
-#
-#         # CV는 원본 학습 데이터 사용 (SMOTE 제외)
-#         try:
-#             cv_scores = cross_val_score(model, X_sns_train_proc, y_sns_train, cv=sns_cv, scoring='f1', n_jobs=-1)
-#         except Exception as cv_error:
-#             print(f"  ⚠️ CV 실패: {cv_error}")
-#             cv_scores = np.array([np.nan])
-#
-#         model_results['SNS'][name] = {
-#             '정확도_Val': acc_val, '정밀도_Val': prec_val, '재현율_Val': rec_val,
-#             'F1 점수_Val': f1_val, 'AUC-ROC_Val': auc_val,
-#             '정확도_Test': acc_test, '정밀도_Test': prec_test, '재현율_Test': rec_test,
-#             'F1 점수_Test': f1_test, 'AUC-ROC_Test': auc_test,
-#             'Precision@10_Val': precision_at_10_val, 'Precision@10_Test': precision_at_10_test,
-#             '고위험군_Precision_Test': high_risk_precision,
-#             'CV F1 평균': cv_scores.mean(), 'CV F1 표준편차': cv_scores.std()
-#         }
-#
-#         print(f"  ✅ {name}: Val F1={f1_val:.4f}, Test F1={f1_test:.4f}, Val Precision@10={precision_at_10_val:.2f}, Test Precision@10={precision_at_10_test:.2f}, 고위험군 Precision={high_risk_precision:.2f}")
-#
-#         if f1_test >= 0.99:
-#             print(f"  🎉 99% 목표 달성! F1: {f1_test:.4f}")
-#
-#     # 딥러닝 전이학습 모델
-#     print(f"  🔄 딥러닝 전이학습 모델 학습 중...")
-#     sns_dl_model = create_transfer_learning_model(X_sns_train_proc.shape[1])
-#
-#     # 콜백 함수
-#     early_stop = EarlyStopping(monitor='val_auc', patience=15, restore_best_weights=True, mode='max')
-#     lr_reduce = ReduceLROnPlateau(monitor='val_loss', patience=5, factor=0.5, min_lr=1e-6)
-#
-#     history = sns_dl_model.fit(
-#         X_sns_train_sm, y_sns_train_sm,
-#         epochs=100, batch_size=32,
-#         validation_data=(X_sns_val_proc, y_sns_val),
-#         callbacks=[early_stop, lr_reduce],
-#         verbose=0
-#     )
-#
-#     # 검증 데이터 평가 (이탈예측)
-#     y_prob_dl_val = sns_dl_model.predict(X_sns_val_proc, verbose=0).flatten()
-#     y_pred_dl_val = (y_prob_dl_val >= 0.5).astype(int)
-#
-#     dl_acc_val = accuracy_score(y_sns_val, y_pred_dl_val)
-#     dl_prec_val = precision_score(y_sns_val, y_pred_dl_val, zero_division=0)
-#     dl_rec_val = recall_score(y_sns_val, y_pred_dl_val, zero_division=0)
-#     dl_f1_val = f1_score(y_sns_val, y_pred_dl_val, zero_division=0)
-#     dl_auc_val = roc_auc_score(y_sns_val, y_prob_dl_val)
-#
-#     # 검증 데이터 TOP10 추출
-#     val_indices = X_sns_val.index if hasattr(X_sns_val, 'index') else range(len(y_prob_dl_val))
-#     val_df = sns_df.iloc[val_indices].copy()
-#     val_df['churn_prob'] = y_prob_dl_val
-#     val_df = val_df.sort_values('churn_prob', ascending=False)
-#
-#     top10_risk_val = val_df.head(10)
-#     actual_churn_in_top10_val = top10_risk_val['churn'].sum()
-#     precision_at_10_dl_val = actual_churn_in_top10_val / 10
-#
-#     # 테스트 데이터 평가 (이탈예측)
-#     y_prob_dl_test = sns_dl_model.predict(X_sns_test_proc, verbose=0).flatten()
-#     y_pred_dl_test = (y_prob_dl_test >= 0.5).astype(int)
-#
-#     dl_acc_test = accuracy_score(y_sns_test, y_pred_dl_test)
-#     dl_prec_test = precision_score(y_sns_test, y_pred_dl_test, zero_division=0)
-#     dl_rec_test = recall_score(y_sns_test, y_pred_dl_test, zero_division=0)
-#     dl_f1_test = f1_score(y_sns_test, y_pred_dl_test, zero_division=0)
-#     dl_auc_test = roc_auc_score(y_sns_test, y_prob_dl_test)
-#
-#     # 테스트 데이터 TOP10 추출
-#     test_indices = X_sns_test.index if hasattr(X_sns_test, 'index') else range(len(y_prob_dl_test))
-#     test_df = sns_df.iloc[test_indices].copy()
-#     test_df['churn_prob'] = y_prob_dl_test
-#     test_df = test_df.sort_values('churn_prob', ascending=False)
-#
-#     top10_risk_test = test_df.head(10)
-#     actual_churn_in_top10_test = top10_risk_test['churn'].sum()
-#     precision_at_10_dl_test = actual_churn_in_top10_test / 10
-#
-#     # 고위험군 식별 (확률 > 0.7)
-#     high_risk_test = test_df[test_df['churn_prob'] > 0.7]
-#     high_risk_precision_dl = high_risk_test['churn'].sum() / len(high_risk_test) if len(high_risk_test) > 0 else 0.0
-#
-#     model_results['SNS']['DeepLearning_Transfer'] = {
-#         '정확도_Val': dl_acc_val, '정밀도_Val': dl_prec_val, '재현율_Val': dl_rec_val,
-#         'F1 점수_Val': dl_f1_val, 'AUC-ROC_Val': dl_auc_val,
-#         '정확도_Test': dl_acc_test, '정밀도_Test': dl_prec_test, '재현율_Test': dl_rec_test,
-#         'F1 점수_Test': dl_f1_test, 'AUC-ROC_Test': dl_auc_test,
-#         'Precision@10_Val': precision_at_10_dl_val, 'Precision@10_Test': precision_at_10_dl_test,
-#         '고위험군_Precision_Test': high_risk_precision_dl,
-#         'CV F1 평균': dl_f1_test, 'CV F1 표준편차': 0.0
-#     }
-#
-#     print(f"  ✅ 딥러닝 전이학습: Val F1={dl_f1_val:.4f}, Test F1={dl_f1_test:.4f}, Val Precision@10={precision_at_10_dl_val:.2f}, Test Precision@10={precision_at_10_dl_test:.2f}, 고위험군 Precision={high_risk_precision_dl:.2f}")
-#
-#     if dl_f1_test >= 0.99:
-#         print(f"  🎉 99% 목표 달성! F1: {dl_f1_test:.4f}")
-#
-#     # 최적 모델 저장
-#     sns_best_model_name = max(model_results['SNS'], key=lambda x: model_results['SNS'][x]['F1 점수_Test'])
-#     print(f"  🏆 SNS 최적 모델: {sns_best_model_name} (Test F1: {model_results['SNS'][sns_best_model_name]['F1 점수_Test']:.4f})")
-#
-#     # SNS 최적 모델로 TOP10 추출 및 저장
-#     if sns_best_model_name == 'DeepLearning_Transfer':
-#         sns_best_probs = sns_dl_model.predict(X_sns_test_proc, verbose=0).flatten()
-#     else:
-#         sns_best_model = sns_models_to_train[sns_best_model_name]
-#         sns_best_probs = sns_best_model.predict_proba(X_sns_test_proc)[:, 1]
-#
-#     sns_test_indices = X_sns_test.index if hasattr(X_sns_test, 'index') else range(len(sns_best_probs))
-#     sns_test_df = sns_df.iloc[sns_test_indices].copy()
-#     sns_test_df['churn_prob'] = sns_best_probs
-#     sns_test_df = sns_test_df.sort_values('churn_prob', ascending=False)
-#     sns_top10 = sns_test_df.head(10)
-#     sns_top10.to_csv(os.path.join(BASE_DIR, 'assets', 'sns_top10_customers.csv'), index=False, encoding='utf-8-sig')
-#     print(f"  📊 SNS TOP10 고객 저장 완료: assets/sns_top10_customers.csv")
-#
-#     # SNS TOP10 데이터프레임 출력
-#     print("\n" + "=" * 60)
-#     print("📊 SNS 고위험 이탈예측 TOP10 고객")
-#     print("=" * 60)
-#     print(sns_top10[['churn_prob', 'churn']].to_string(index=False))
-#     print("=" * 60)
-# else:
-#     print("  ⚠️ SNS 데이터 없음, 건너뜀")
+    ott_top10_dict = []
 
 # ─── 모델 결과 저장 및 시각화 ───────────────────────────────────────────────────
+# 학습된 모델들의 성능 지표를 JSON 파일로 저장하고 Streamlit 시각화용 데이터를 생성
 print("\n" + "=" * 60)
 print("모델 결과 저장 및 시각화")
 print("=" * 60)
@@ -1630,10 +1418,103 @@ for task_name, task_results in model_results.items():
         task_results_serializable[model_name] = metrics_serializable
     results_json[task_name] = task_results_serializable
 
-with open(os.path.join(BASE_DIR, 'data', 'ott_sns_model_results.json'), 'w', encoding='utf-8') as f:
+with open(os.path.join(BASE_DIR, 'data', 'ott_model_results.json'), 'w', encoding='utf-8') as f:
     json.dump(results_json, f, ensure_ascii=False, indent=2)
 
-print("✅ 모델 결과 저장 완료: data/ott_sns_model_results.json")
+print("✅ 모델 결과 저장 완료: data/ott_model_results.json")
+
+# 시각화용 데이터 저장 (Streamlit용)
+visualization_data = {
+    'model_results': results_json,
+    'confusion_matrices': confusion_matrices,
+    'features': ott_features.tolist() if ott_df is not None else [],
+    'feature_importance': {},
+    'shap_values': None,
+    'y_prob_val': y_prob_val_dict if 'y_prob_val_dict' in globals() else {},
+    'y_prob_test': y_prob_test_dict if 'y_prob_test_dict' in globals() else {},
+    'y_true_val': y_ott_val.tolist() if ott_df is not None else [],
+    'y_true_test': y_ott_test.tolist() if ott_df is not None else [],
+    'data_analysis': {},
+    'top10_customers': ott_top10_dict if ott_df is not None else [],
+    'roc_curves': roc_curves_dict if 'roc_curves_dict' in globals() else {},
+    'pr_curves': pr_curves_dict if 'pr_curves_dict' in globals() else {},
+    'threshold_f1_curves': threshold_f1_curves_dict if 'threshold_f1_curves_dict' in globals() else {},
+    'risk_distribution': risk_distribution_dict if 'risk_distribution_dict' in globals() else {}
+}
+
+# XGBoost feature importance 저장
+if ott_df is not None and 'XGBoost' in model_results.get('OTT', {}):
+    try:
+        xgb_model = model_results['OTT']['XGBoost'].get('model', None)
+        if xgb_model is not None:
+            visualization_data['feature_importance'] = dict(zip(ott_features, xgb_model.feature_importances_.tolist()))
+            # XGBoost 예측 확률 저장
+            y_prob_val_xgb = xgb_model.predict_proba(X_ott_val_proc)[:, 1]
+            y_prob_test_xgb = xgb_model.predict_proba(X_ott_test_proc)[:, 1]
+            visualization_data['y_prob_val']['XGBoost'] = y_prob_val_xgb.tolist()
+            visualization_data['y_prob_test']['XGBoost'] = y_prob_test_xgb.tolist()
+    except:
+        pass
+
+# Ensemble 예측 확률 저장
+if ott_df is not None and 'Ensemble' in model_results.get('OTT', {}):
+    try:
+        ensemble_model = model_results['OTT']['Ensemble'].get('model', None)
+        if ensemble_model is not None:
+            y_prob_val_ens = ensemble_model.predict_proba(X_ott_val_proc)[:, 1]
+            y_prob_test_ens = ensemble_model.predict_proba(X_ott_test_proc)[:, 1]
+            visualization_data['y_prob_val']['Ensemble'] = y_prob_val_ens.tolist()
+            visualization_data['y_prob_test']['Ensemble'] = y_prob_test_ens.tolist()
+    except:
+        pass
+
+# 원본 데이터 저장 (상관관계 히트맵용)
+if ott_df is not None:
+    try:
+        numeric_cols = ott_df.select_dtypes(include=[np.number]).columns.tolist()
+        ott_df_numeric = ott_df[numeric_cols].fillna(0)
+        visualization_data['ott_data'] = ott_df_numeric.to_dict(orient='records')
+        visualization_data['ott_columns'] = numeric_cols
+        
+        # 데이터 분석 정보 저장
+        visualization_data['data_analysis'] = {
+            'total_samples': len(ott_df),
+            'total_features': len(ott_df.columns),
+            'numeric_features': len(numeric_cols),
+            'categorical_features': len(ott_df.columns) - len(numeric_cols),
+            'missing_values': ott_df.isnull().sum().to_dict(),
+            'missing_percentage': (ott_df.isnull().sum() / len(ott_df) * 100).to_dict(),
+            'data_types': ott_df.dtypes.astype(str).to_dict(),
+            'preprocessing_stats': preprocessing_stats if 'preprocessing_stats' in globals() else {},
+            'feature_stats': ott_df[numeric_cols].describe().to_dict()
+        }
+    except:
+        pass
+
+# numpy 타입을 Python 네이티브 타입으로 변환하는 함수
+def convert_to_serializable(obj):
+    if isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(item) for item in obj]
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    else:
+        return obj
+
+# visualization_data 직렬화 가능하도록 변환
+visualization_data_serializable = convert_to_serializable(visualization_data)
+
+with open(os.path.join(BASE_DIR, 'data', 'visualization_data.json'), 'w', encoding='utf-8') as f:
+    json.dump(visualization_data_serializable, f, ensure_ascii=False, indent=2)
+
+print("✅ 시각화용 데이터 저장 완료: data/visualization_data.json")
 
 # 전처리 객체 저장
 if ott_df is not None:
@@ -1710,9 +1591,9 @@ for idx, (task_name, task_title) in enumerate(zip(task_names, task_titles)):
         ax.set_title(task_title, fontweight='bold', fontsize=14)
 
 plt.tight_layout()
-plt.savefig(os.path.join(BASE_DIR, 'assets', 'ott_sns_model_results.png'), dpi=150, bbox_inches='tight', facecolor='white')
+plt.savefig(os.path.join(BASE_DIR, 'assets', 'ott_model_results.png'), dpi=150, bbox_inches='tight', facecolor='white')
 plt.close()
-print("✅ 결과 시각화 저장 완료: assets/ott_sns_model_results.png")
+print("✅ 결과 시각화 저장 완료: assets/ott_model_results.png")
 
 # ─── 최종 성능 요약 ─────────────────────────────────────────────────────────────
 print("\n" + "=" * 60)
