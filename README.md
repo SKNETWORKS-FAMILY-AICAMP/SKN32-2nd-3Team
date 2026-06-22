@@ -50,8 +50,7 @@
 ### 1. 환경 설치
 
 ```bash
-pip install streamlit scikit-learn xgboost lightgbm imbalanced-learn \
-            shap plotly opencv-python-headless tensorflow sqlalchemy PyMySQL matplotlib-venn
+pip install -r requirements.txt 
 ```
 
 ### 2. 데이터 생성 및 전처리
