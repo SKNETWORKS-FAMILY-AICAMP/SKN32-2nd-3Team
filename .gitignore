@@ -35,18 +35,36 @@ wheels/
 # Virtual Environment
 
 # =========================
+# --- 데이터베이스 및 환경 변수 (보안 필수!) ---
+.env
+config.ini
+secrets.json
+*.db
+*.sqlite3
+*.key
 
 .venv/
+# --- 파이썬 가상환경 및 라이브러리 ---
 venv/
+.venv/
 env/
 ENV/
+bin/
+include/
+lib/
+lib64/
 
 # =========================
 
 # IDE
 
 # =========================
+# --- 파이썬 캐시 및 컴파일 파일 ---
+__pycache__/
+*.py[cod]
+*$py.class
 
+# --- 코드 편집기 (IDE) 설정 파일 ---
 .vscode/
 .idea/
 
@@ -160,6 +178,10 @@ desktop.ini
 *.tmp
 *.temp
 *.bak
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 *.swp
 *~
 
@@ -194,3 +216,6 @@ data/ott_data_v.2/
 
 # MLflow database (in root)
 mlflow.db
+# --- 운영체제(OS) 임시 파일 ---
+.DS_Store
+Thumbs.db

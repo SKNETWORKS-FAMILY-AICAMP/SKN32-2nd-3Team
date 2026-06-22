@@ -51,7 +51,7 @@
 
 ```bash
 pip install streamlit scikit-learn xgboost lightgbm imbalanced-learn \
-            shap plotly opencv-python-headless tensorflow
+            shap plotly opencv-python-headless tensorflow sqlalchemy PyMySQL matplotlib-venn
 ```
 
 ### 2. 데이터 생성 및 전처리
