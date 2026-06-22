@@ -7,19 +7,15 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import joblib
 import json
 import os
-import sys
 import cv2
-import base64
 import time
 import warnings
 import matplotlib.pyplot as plt
 from matplotlib_venn import venn3  # 벤 다이어그램 라이브러리
 from datetime import datetime
 from sqlalchemy import create_engine
-import pymysql
 
 warnings.filterwarnings('ignore')
 
@@ -91,16 +87,13 @@ MENU_BY_SERVICE = {
     "Tving": ["티빙 페이지", "EDA 분석"],
 }
 
-# ─── CSS 커스텀 스타일 정의 ──────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .stApp { background-color: #0F1117; }
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1f2e 0%, #0d1117 100%);
-        border-right: 1px solid #30363d;
-    }
-</style>
-""", unsafe_allow_html=True)
+# ─── CSS 커스텀 스타일 정의 (디자인 요소는 ui_styles.py로 분리) ───────────────────────────
+from ui_styles import (
+    GLOBAL_CSS, LOGIN_PAGE_CSS, logo_data_uri, logo_img_html,
+    login_left_title_html, login_right_title_html,
+)
+
+st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
 # ─── [데이터 펑션] MySQL 실시간 연동 및 통합 전처리 ──────────────────────────────────────
 @st.cache_data
@@ -277,6 +270,12 @@ def show_eda(df):
     st.dataframe(df.head(100), use_container_width=True)
 
 # ─── 3. 모델 성능 페이지 ───────────────────────────────────────────────────────
+def _select_model(task_name, model_results, key_prefix):
+    """Task에 속한 모델 목록에서 하나를 고르는 selectbox (여러 섹션에서 재사용)."""
+    models_in_task = list(model_results[task_name].keys())
+    return st.selectbox("모델 선택", models_in_task, key=f"{key_prefix}_model_{task_name}")
+
+
 def show_model_performance(viz_data):
     st.header("📊 모델 성능 비교")
 
@@ -286,16 +285,21 @@ def show_model_performance(viz_data):
         # 모델 성능 테이블 생성
         performance_data = []
 
+        # 실제 데이터는 영어 키가 아니라 "정확도_Test"처럼 한글+Val/Test 접미사 키로 저장되어 있습니다.
+        # Test 셋 값을 우선 사용하고, 없으면 Val 값으로 대체합니다.
+        def _get_metric(metrics, korean_key):
+            return metrics.get(f"{korean_key}_Test", metrics.get(f"{korean_key}_Val", 0))
+
         for task_name, task_results in model_results.items():
             for model_name, metrics in task_results.items():
                 performance_data.append({
                     "Task": task_name,
                     "Model": model_name,
-                    "Accuracy": metrics.get('accuracy', 0),
-                    "Precision": metrics.get('precision', 0),
-                    "Recall": metrics.get('recall', 0),
-                    "F1-Score": metrics.get('f1', 0),
-                    "ROC-AUC": metrics.get('roc_auc', 0)
+                    "Accuracy": _get_metric(metrics, '정확도'),
+                    "Precision": _get_metric(metrics, '정밀도'),
+                    "Recall": _get_metric(metrics, '재현율'),
+                    "F1-Score": _get_metric(metrics, 'F1 점수'),
+                    "ROC-AUC": _get_metric(metrics, 'AUC-ROC')
                 })
 
         if performance_data:
@@ -352,8 +356,9 @@ def show_model_performance(viz_data):
                 best_f1 = 0
                 best_model = ""
                 for model_name, metrics in task_results.items():
-                    if metrics.get('f1', 0) > best_f1:
-                        best_f1 = metrics.get('f1', 0)
+                    f1_value = _get_metric(metrics, 'F1 점수')
+                    if f1_value > best_f1:
+                        best_f1 = f1_value
                         best_model = model_name
 
                 best_models.append({
@@ -374,13 +379,7 @@ def show_model_performance(viz_data):
             for task_name in model_results.keys():
                 st.markdown(f"### {task_name}")
 
-                # 모델 선택
-                models_in_task = list(model_results[task_name].keys())
-                selected_model = st.selectbox(
-                    "모델 선택",
-                    models_in_task,
-                    key=f"cm_model_{task_name}"
-                )
+                selected_model = _select_model(task_name, model_results, "cm")
 
                 # Confusion Matrix 데이터가 있는지 확인
                 if 'confusion_matrices' in viz_data and viz_data['confusion_matrices']:
@@ -430,27 +429,16 @@ def show_model_performance(viz_data):
             for task_name in model_results.keys():
                 st.markdown(f"### {task_name}")
 
-                # 모델 선택
-                models_in_task = list(model_results[task_name].keys())
-                selected_model = st.selectbox(
-                    "모델 선택",
-                    models_in_task,
-                    key=f"roc_model_{task_name}"
-                )
+                selected_model = _select_model(task_name, model_results, "roc")
 
-                # ROC Curve 데이터가 있는지 확인
-                if 'y_true_test' in viz_data and 'y_prob_test' in viz_data:
-                    y_true = np.array(viz_data['y_true_test'])
-
-                    # 해당 모델의 확률 데이터 가져오기 (현재는 모델별로 저장되어 있지 않으므로 예시로 표시)
-                    st.info("⚠️ ROC Curve 데이터가 모델별로 저장되어 있지 않습니다. train_models.py를 수정하여 각 모델의 확률을 저장해야 합니다.")
-
-                    # 예시 ROC Curve
-                    fpr = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-                    tpr = np.array([0.0, 0.3, 0.5, 0.7, 0.8, 0.85, 0.9, 0.95, 0.97, 0.99, 1.0])
-                    auc = 0.85
+                # ROC Curve 데이터가 있는지 확인 (roc_curves는 "{task}_{model}" 형태의 평탄한 키로 저장되어 있습니다)
+                roc_data = viz_data.get('roc_curves', {}).get(f"{task_name}_{selected_model}")
+                if roc_data:
+                    fpr = np.array(roc_data['fpr'])
+                    tpr = np.array(roc_data['tpr'])
+                    auc = roc_data['auc']
                 else:
-                    st.info("⚠️ ROC Curve 데이터가 없습니다. train_models.py를 실행하여 확률 데이터를 저장해야 합니다.")
+                    st.info(f"⚠️ {selected_model}의 ROC Curve 데이터가 없습니다.")
                     fpr = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
                     tpr = np.array([0.0, 0.3, 0.5, 0.7, 0.8, 0.85, 0.9, 0.95, 0.97, 0.99, 1.0])
                     auc = 0.85
@@ -491,27 +479,16 @@ def show_model_performance(viz_data):
             for task_name in model_results.keys():
                 st.markdown(f"### {task_name}")
 
-                # 모델 선택
-                models_in_task = list(model_results[task_name].keys())
-                selected_model = st.selectbox(
-                    "모델 선택",
-                    models_in_task,
-                    key=f"pr_model_{task_name}"
-                )
+                selected_model = _select_model(task_name, model_results, "pr")
 
-                # Precision-Recall Curve 데이터가 있는지 확인
-                if 'y_true_test' in viz_data and 'y_prob_test' in viz_data:
-                    y_true = np.array(viz_data['y_true_test'])
-
-                    # 해당 모델의 확률 데이터 가져오기 (현재는 모델별로 저장되어 있지 않으므로 예시로 표시)
-                    st.info("⚠️ Precision-Recall Curve 데이터가 모델별로 저장되어 있지 않습니다. train_models.py를 수정하여 각 모델의 확률을 저장해야 합니다.")
-
-                    # 예시 Precision-Recall Curve
-                    precision = np.array([1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5])
-                    recall = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-                    ap = 0.75
+                # Precision-Recall Curve 데이터가 있는지 확인 (pr_curves도 "{task}_{model}" 형태의 평탄한 키)
+                pr_data = viz_data.get('pr_curves', {}).get(f"{task_name}_{selected_model}")
+                if pr_data:
+                    precision = np.array(pr_data['precision'])
+                    recall = np.array(pr_data['recall'])
+                    ap = pr_data['ap']
                 else:
-                    st.info("⚠️ Precision-Recall Curve 데이터가 없습니다. train_models.py를 실행하여 확률 데이터를 저장해야 합니다.")
+                    st.info(f"⚠️ {selected_model}의 Precision-Recall Curve 데이터가 없습니다.")
                     precision = np.array([1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5])
                     recall = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
                     ap = 0.75
@@ -771,13 +748,7 @@ def show_model_performance(viz_data):
                 for task_name in model_results.keys():
                     st.markdown(f"### {task_name}")
 
-                    # 모델 선택
-                    models_in_task = list(model_results[task_name].keys())
-                    selected_model = st.selectbox(
-                        "모델 선택",
-                        models_in_task,
-                        key=f"tf_model_{task_name}"
-                    )
+                    selected_model = _select_model(task_name, model_results, "tf")
 
                     tf_data = threshold_f1_curves.get(f"{task_name}_{selected_model}")
                     if tf_data is None:
@@ -985,13 +956,7 @@ def show_model_performance(viz_data):
                 for task_name in model_results.keys():
                     st.markdown(f"### {task_name}")
 
-                    # 모델 선택
-                    models_in_task = list(model_results[task_name].keys())
-                    selected_model = st.selectbox(
-                        "모델 선택",
-                        models_in_task,
-                        key=f"rd_model_{task_name}"
-                    )
+                    selected_model = _select_model(task_name, model_results, "rd")
 
                     rd_data = risk_distribution.get(f"{task_name}_{selected_model}")
                     if rd_data is None:
@@ -1119,74 +1084,6 @@ def show_model_performance(viz_data):
                 )
 
                 st.plotly_chart(fig_pie, use_container_width=True)
-
-                st.markdown("---")
-
-            # Code Detail 시각화 (use_ml_history.txt)
-            st.subheader("Code Detail (use_ml_history.txt)")
-
-            # use_ml_history.txt 파일 읽기
-            ml_history_path = os.path.join(BASE_DIR, 'ml', 'use_ml_history.txt')
-
-            if os.path.exists(ml_history_path):
-                try:
-                    with open(ml_history_path, 'r', encoding='utf-8') as f:
-                        ml_history_content = f.read()
-
-                    st.markdown("### ML History 내용")
-                    st.text_area("use_ml_history.txt", ml_history_content, height=400)
-
-                    # 내용을 라인별로 분석하여 시각화
-                    lines = ml_history_content.split('\n')
-
-                    # 날짜별 통계
-                    date_stats = {}
-                    for line in lines:
-                        if line.strip():
-                            # 날짜 패턴 찾기 (예: 2024-06-21)
-                            import re
-                            date_match = re.search(r'\d{4}-\d{2}-\d{2}', line)
-                            if date_match:
-                                date = date_match.group()
-                                if date not in date_stats:
-                                    date_stats[date] = 0
-                                date_stats[date] += 1
-
-                    if date_stats:
-                        st.markdown("### 날짜별 활동 통계")
-
-                        date_df = pd.DataFrame([
-                            {"Date": date, "Activity Count": count}
-                            for date, count in sorted(date_stats.items())
-                        ])
-
-                        st.dataframe(date_df, use_container_width=True, hide_index=True)
-
-                        # 날짜별 활동 바 차트
-                        fig_date = go.Figure(data=[
-                            go.Bar(
-                                x=date_df['Date'],
-                                y=date_df['Activity Count'],
-                                marker_color='purple'
-                            )
-                        ])
-
-                        fig_date.update_layout(
-                            title="날짜별 활동 통계",
-                            xaxis_title="Date",
-                            yaxis_title="Activity Count",
-                            height=400,
-                            margin=dict(l=20, r=20, t=40, b=20)
-                        )
-
-                        st.plotly_chart(fig_date, use_container_width=True)
-
-                    st.markdown("---")
-                except Exception as e:
-                    st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
-            else:
-                st.warning("⚠️ use_ml_history.txt 파일을 찾을 수 없습니다.")
-                st.markdown("**파일 경로:** `ml/use_ml_history.txt`")
 
                 st.markdown("---")
         else:
@@ -1353,23 +1250,6 @@ def show_churn_prediction(viz_data):
     """)
 
 # ─── 얼굴 인식 로그인용 유틸리티 ────────────────────────────────────────────────────
-def _image_file_to_bgr(image_file):
-    """st.file_uploader 결과 또는 이미 BGR로 캡처된 numpy 배열을 OpenCV BGR로 반환합니다."""
-    if isinstance(image_file, np.ndarray):
-        return image_file
-
-    from PIL import Image
-
-    img = Image.open(image_file)
-    img_array = np.array(img)
-
-    if len(img_array.shape) == 3 and img_array.shape[2] == 4:
-        return cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
-    elif len(img_array.shape) == 3:
-        return cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-    return img_array
-
-
 def release_camera(key_prefix: str) -> None:
     """해당 key_prefix로 열려 있는 카메라를 닫고, 이전에 찍힌 사진 기록도 함께 지웁니다."""
     cap_key = f"{key_prefix}_cap"
@@ -1456,25 +1336,6 @@ def live_face_capture(key_prefix: str, disabled: bool = False):
     return st.session_state.get(captured_key)
 
 
-def face_image_input(key_prefix: str, label: str, disabled: bool = False):
-    """카메라 촬영(실시간 윤곽선 미리보기) 또는 증명사진 파일 업로드 중 선택할 수 있는 입력 위젯."""
-    mode = st.radio(
-        "입력 방식",
-        ["📷 카메라 촬영", "🖼️ 사진 파일 업로드"],
-        key=f"{key_prefix}_mode",
-        horizontal=True,
-        disabled=disabled,
-    )
-    if mode == "📷 카메라 촬영":
-        return live_face_capture(key_prefix, disabled=disabled)
-
-    # 사진 파일 업로드 모드로 전환하면 굳이 카메라를 켜둘 필요가 없으므로 닫습니다.
-    release_camera(key_prefix)
-    return st.file_uploader(
-        label, type=["jpg", "jpeg", "png"], key=f"{key_prefix}_upload", disabled=disabled
-    )
-
-
 def process_face_login(image_data, user_id):
     """1차 인증으로 식별된 계정(user_id)에 대해 얼굴 인증을 수행합니다."""
     try:
@@ -1497,7 +1358,7 @@ def show_sidebar():
     st.sidebar.title(f"🎬 {st.session_state.username} 님")
     st.sidebar.write(f"권한: `{st.session_state.user_role}`")
     if st.session_state.login_time:
-        st.sidebar.caption(f"Since: {st.session_state.login_time.strftime('%H:%M:%S')}")
+        st.sidebar.caption(f"최근 로그인: {st.session_state.login_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     menu_list = MENU_BY_SERVICE.get(st.session_state.service, ["대시보드"])
     if st.session_state.current_page not in menu_list:
@@ -1519,15 +1380,63 @@ def show_sidebar():
         st.rerun()
 
 
-def show_login_page():
-    """1차 인증(ID/PW) 화면. 성공하면 얼굴 인증(또는 얼굴 등록) 단계로 넘어갑니다."""
-    st.title("🔐 OTT Analytics 관제 시스템")
-    st.caption("1차 인증(아이디/비밀번호) 후 얼굴 인증으로 로그인합니다.")
+_SERVICE_CHOICES = [
+    ("ALL", "🌐 ALL"),
+    ("Netflix", "🎬 Netflix"),
+    ("Tving", "📺 Tving"),
+    ("YouTube", "▶️ YouTube"),
+]
 
-    with st.form("login_form"):
-        username = st.text_input("아이디", value="admin")
-        password = st.text_input("비밀번호", type="password", value="admin123")
-        submit = st.form_submit_button("로그인", use_container_width=True)
+
+def _on_service_box_change(chosen_key):
+    """체크박스 4개 중 하나만 선택되도록 강제합니다 (단일 선택)."""
+    for key, _ in _SERVICE_CHOICES:
+        if key != chosen_key:
+            st.session_state[f"svc_box_{key}"] = False
+
+
+def show_login_page():
+    """1차 인증(ID/PW) 화면. 성공하면 얼굴 인증(또는 얼굴 등록) 단계로 넘어갑니다.
+    좌측의 OTT 분야 선택은 로그인 버튼을 활성화하기 위한 UX 단계일 뿐이며,
+    로그인 후 실제 권한/메뉴는 인증된 계정의 DB role(ROLE_META)로 결정됩니다."""
+
+    logo_uri = logo_data_uri(BASE_DIR)
+
+    st.html(LOGIN_PAGE_CSS)
+
+    with st.container(key="login_shell"):
+        left, right = st.columns([1, 1])
+
+        with left:
+            if logo_uri:
+                st.html(logo_img_html(logo_uri))
+
+            st.html(login_left_title_html("어떤 OTT 관리자이신가요?"))
+
+            svc_cols = st.columns(len(_SERVICE_CHOICES))
+            for svc_col, (key, label) in zip(svc_cols, _SERVICE_CHOICES):
+                with svc_col:
+                    st.checkbox(
+                        label,
+                        key=f"svc_box_{key}",
+                        on_change=_on_service_box_change,
+                        args=(key,),
+                    )
+
+            selected_count = sum(st.session_state.get(f"svc_box_{key}", False) for key, _ in _SERVICE_CHOICES)
+            can_login = selected_count == 1
+
+        with right:
+            st.html(login_right_title_html("🔐 OTT Analytics 관제 시스템"))
+
+            with st.form("login_form"):
+                username = st.text_input("아이디", placeholder="아이디를 입력하세요", icon="📧")
+                password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요", icon="🔒")
+                submit = st.form_submit_button(
+                    "로그인", use_container_width=True, disabled=not can_login
+                )
+                if not can_login:
+                    st.caption("⚠️ 왼쪽에서 관리할 OTT 분야를 하나 선택해주세요.")
 
         if submit:
             from db import verify_user_password, user_has_face, update_login_attempt, log_login_attempt
@@ -1564,133 +1473,30 @@ def show_login_page():
                         st.error(message)
 
 
-def show_face_auth_page():
-    """2차 인증(얼굴 인식) 화면."""
-    st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.2, 1])
+@st.dialog("🔐 얼굴 인증")
+def show_face_auth_dialog():
+    """2차 인증(얼굴 인식/얼굴 등록)을 하나의 팝업으로 처리합니다.
+    얼굴 미등록 계정은 '얼굴 등록하기'가 먼저 뜨고, 등록을 마치면 같은 팝업 자리에서
+    '얼굴 인증하기'로 전환됩니다 (등록 → 인증 순서)."""
+    st.write(f"1차 인증 계정: **{st.session_state.pending_user}**")
 
-    with col2:
-        st.markdown("""
-        <div style="
-            background:#1e2433;
-            border:1px solid #30363d;
-            border-radius:16px;
-            padding:35px;
-            text-align:center;
-        ">
-            <h2 style="color:white;">2차 인증: 얼굴 인식</h2>
-            <p style="color:#8b949e;">
-                ID/PW 인증이 완료되었습니다.<br>
-                얼굴 인증을 진행해주세요.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.info(f"1차 인증 계정: {st.session_state.pending_user}")
-
-        from face_auth import check_lock_status
-        is_locked, lock_message = check_lock_status(st.session_state.pending_user)
-        if is_locked:
-            st.error(lock_message)
-
-        camera_img = face_image_input("face_auth", "얼굴 인증 이미지", disabled=is_locked)
-
-        auth_col1, auth_col2 = st.columns(2)
-
-        with auth_col1:
-            if st.button("얼굴 인증하기", use_container_width=True, disabled=is_locked):
-                if camera_img is None:
-                    st.error("얼굴 이미지를 촬영하거나 업로드해주세요.")
-                else:
-                    img_array = _image_file_to_bgr(camera_img)
-
-                    with st.spinner("얼굴 인증 중..."):
-                        success, similarity, message = process_face_login(img_array, st.session_state.pending_user)
-
-                    st.caption(f"유사도: {similarity:.2%}")
-
-                    if success:
-                        role_meta = ROLE_META.get(
-                            st.session_state.pending_role,
-                            {"label": st.session_state.pending_role, "service": "ALL", "default_page": "대시보드"},
-                        )
-
-                        st.session_state.authenticated = True
-                        st.session_state.username = st.session_state.pending_user
-                        st.session_state.user_role = role_meta["label"]
-                        st.session_state.service = role_meta["service"]
-                        st.session_state.current_page = role_meta["default_page"]
-                        st.session_state.login_time = datetime.now()
-
-                        st.session_state.pending_user = None
-                        st.session_state.pending_role = None
-                        st.session_state.auth_step = "login"
-
-                        st.success("2차 얼굴 인증 성공")
-                        time.sleep(0.5)
-                        st.rerun()
-                    else:
-                        from db import get_user_lock_info
-                        lock_info = get_user_lock_info(st.session_state.pending_user)
-                        if lock_info:
-                            remaining = max(0, 5 - (lock_info["fail_count"] or 0))
-                            st.error(f"얼굴 인증 실패: {message} (남은 시도: {remaining}회)")
-                        else:
-                            st.error(f"얼굴 인증 실패: {message}")
-
-        with auth_col2:
-            if st.button("이전으로", use_container_width=True):
-                release_camera("face_auth")
-                st.session_state.pending_user = None
-                st.session_state.pending_role = None
-                st.session_state.auth_step = "login"
-                st.rerun()
-
-
-def show_face_register_page():
-    """1차 인증은 통과했지만 얼굴이 아직 등록되지 않은 계정의 얼굴 최초 등록 화면."""
-    st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.2, 1])
-
-    with col2:
-        st.markdown("""
-        <div style="
-            background:#1e2433;
-            border:1px solid #30363d;
-            border-radius:16px;
-            padding:35px;
-            text-align:center;
-        ">
-            <h2 style="color:white;">얼굴 등록</h2>
-            <p style="color:#8b949e;">
-                이 계정에는 등록된 얼굴 정보가 없습니다.<br>
-                2차 인증을 위해 얼굴을 먼저 등록해주세요.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.info(f"1차 인증 계정: {st.session_state.pending_user}")
-
-        camera_img = face_image_input("face_register", "얼굴 등록 이미지 (증명사진 권장)")
+    if st.session_state.auth_step == "face_register":
+        camera_img = live_face_capture("face_register")
 
         reg_col1, reg_col2 = st.columns(2)
 
         with reg_col1:
             if st.button("얼굴 등록하기", use_container_width=True):
                 if camera_img is None:
-                    st.error("얼굴 이미지를 촬영하거나 업로드해주세요.")
+                    st.error("얼굴 이미지를 촬영해주세요.")
                 else:
                     from face_auth import register_face_for_existing_user
-
-                    img_array = _image_file_to_bgr(camera_img)
 
                     with st.spinner("얼굴 등록 중..."):
                         success, message = register_face_for_existing_user(
                             st.session_state.pending_user,
                             st.session_state.get("pending_user_name", st.session_state.pending_user),
-                            img_array,
+                            camera_img,
                         )
 
                     if success:
@@ -1708,6 +1514,64 @@ def show_face_register_page():
                 st.session_state.pending_role = None
                 st.session_state.auth_step = "login"
                 st.rerun()
+        return
+
+    from face_auth import check_lock_status
+    is_locked, lock_message = check_lock_status(st.session_state.pending_user)
+    if is_locked:
+        st.error(lock_message)
+
+    camera_img = live_face_capture("face_auth", disabled=is_locked)
+
+    auth_col1, auth_col2 = st.columns(2)
+
+    with auth_col1:
+        if st.button("얼굴 인증하기", use_container_width=True, disabled=is_locked):
+            if camera_img is None:
+                st.error("얼굴 이미지를 촬영해주세요.")
+            else:
+                with st.spinner("얼굴 인증 중..."):
+                    success, similarity, message = process_face_login(camera_img, st.session_state.pending_user)
+
+                if success:
+                    user_name = st.session_state.get("pending_user_name") or st.session_state.pending_user
+                    role_meta = ROLE_META.get(
+                        st.session_state.pending_role,
+                        {"label": st.session_state.pending_role, "service": "ALL", "default_page": "대시보드"},
+                    )
+
+                    st.session_state.authenticated = True
+                    st.session_state.username = st.session_state.pending_user
+                    st.session_state.user_role = role_meta["label"]
+                    st.session_state.service = role_meta["service"]
+                    st.session_state.current_page = role_meta["default_page"]
+                    st.session_state.login_time = datetime.now()
+
+                    st.session_state.pending_user = None
+                    st.session_state.pending_role = None
+                    st.session_state.auth_step = "login"
+
+                    st.success(f"확인되었습니다 {user_name}님!")
+                    st.caption(f"유사도: {similarity:.2%}")
+                    time.sleep(1.0)
+                    st.rerun()
+                else:
+                    from db import get_user_lock_info
+                    lock_info = get_user_lock_info(st.session_state.pending_user)
+                    if lock_info:
+                        remaining = max(0, 5 - (lock_info["fail_count"] or 0))
+                        st.error(f"얼굴 인증 실패: {message} (남은 시도: {remaining}회)")
+                    else:
+                        st.error(f"얼굴 인증 실패: {message}")
+                    st.caption(f"유사도: {similarity:.2%}")
+
+    with auth_col2:
+        if st.button("이전으로", use_container_width=True):
+            release_camera("face_auth")
+            st.session_state.pending_user = None
+            st.session_state.pending_role = None
+            st.session_state.auth_step = "login"
+            st.rerun()
 
 
 # ─── 메인 오케스트레이터 컨트롤러 ───────────────────────────────────────────────────
@@ -1719,12 +1583,10 @@ def main():
         release_camera("face_register")
 
     if not st.session_state.authenticated:
-        if st.session_state.auth_step == "face_auth":
-            show_face_auth_page()
-        elif st.session_state.auth_step == "face_register":
-            show_face_register_page()
-        else:
-            show_login_page()
+        # 1차 로그인 화면을 그대로 두고, 얼굴 등록/2차 얼굴 인증은 그 위에 팝업(모달)으로 띄웁니다.
+        show_login_page()
+        if st.session_state.auth_step in ("face_auth", "face_register"):
+            show_face_auth_dialog()
     else:
         show_sidebar()
 
