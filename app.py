@@ -90,7 +90,8 @@ MENU_BY_SERVICE = {
 # ─── CSS 커스텀 스타일 정의 (디자인 요소는 ui_styles.py로 분리) ───────────────────────────
 from ui_styles import (
     GLOBAL_CSS, LOGIN_PAGE_CSS, logo_data_uri, logo_img_html,
-    login_left_title_html, login_right_title_html,
+    login_left_title_html, login_left_subtitle_html,
+    login_right_title_html, login_right_subtitle_html,
 )
 
 st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
@@ -1381,10 +1382,10 @@ def show_sidebar():
 
 
 _SERVICE_CHOICES = [
-    ("ALL", "🌐 ALL"),
-    ("Netflix", "🎬 Netflix"),
-    ("Tving", "📺 Tving"),
-    ("YouTube", "▶️ YouTube"),
+    ("ALL",     "🌐  ALL"),
+    ("Netflix", "🎬  Netflix"),
+    ("Tving",   "📺  Tving"),
+    ("YouTube", "▶️  YouTube"),
 ]
 
 
@@ -1412,22 +1413,23 @@ def show_login_page():
                 st.html(logo_img_html(logo_uri))
 
             st.html(login_left_title_html("어떤 OTT 관리자이신가요?"))
+            st.html(login_left_subtitle_html("관리할 플랫폼을 선택해주세요"))
 
-            svc_cols = st.columns(len(_SERVICE_CHOICES))
-            for svc_col, (key, label) in zip(svc_cols, _SERVICE_CHOICES):
-                with svc_col:
-                    st.checkbox(
-                        label,
-                        key=f"svc_box_{key}",
-                        on_change=_on_service_box_change,
-                        args=(key,),
-                    )
+            # 체크박스 세로 일렬 배치 (디자인 가이드: 수직 스택)
+            for key, label in _SERVICE_CHOICES:
+                st.checkbox(
+                    label,
+                    key=f"svc_box_{key}",
+                    on_change=_on_service_box_change,
+                    args=(key,),
+                )
 
             selected_count = sum(st.session_state.get(f"svc_box_{key}", False) for key, _ in _SERVICE_CHOICES)
             can_login = selected_count == 1
 
         with right:
             st.html(login_right_title_html("🔐 OTT Analytics 관제 시스템"))
+            st.html(login_right_subtitle_html("관리자 계정으로 로그인하세요"))
 
             with st.form("login_form"):
                 username = st.text_input("아이디", placeholder="아이디를 입력하세요", icon="📧")
