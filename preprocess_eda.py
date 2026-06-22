@@ -31,11 +31,37 @@ else:
 
 plt.rcParams['axes.unicode_minus'] = False
 
+<<<<<<< HEAD
 # Get project root directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ─── 1. 데이터 로드 ───────────────────────────────────────────────────────────
 df = pd.read_csv(os.path.join(BASE_DIR, 'data', 'korea_telecom_churn.csv'), encoding='utf-8-sig')
+=======
+# ─── 1. 데이터 로드 ───────────────────────────────────────────────────────────
+# df = pd.read_csv('C:/project_file/churn_project_ott_v2/churn_project/data/korea_telecom_churn.csv', encoding='utf-8-sig')
+from sqlalchemy import create_engine
+
+# ─── 1. 데이터 로드 (MySQL 연동) ───────────────────────────────────────────────
+# 본인의 MySQL 비밀번호와 포트번호(기본 3306)를 입력하세요.
+engine = create_engine("mysql+pymysql://root:mysql80@localhost:3306/ott_db")
+
+query = """
+SELECT 
+    u.OPID AS `고객ID`, 
+    u.YEAR,
+    u.ott_first, 
+    u.ott_second,
+    t.`Weekday usage`, 
+    t.`Weekend usage`,
+    m.svod
+FROM ott_usage u
+LEFT JOIN ott_time t ON u.OPID = t.OPID AND u.YEAR = t.YEAR
+LEFT JOIN ott_money m ON u.OPID = m.OPID AND u.YEAR = m.YEAR
+"""
+
+df = pd.read_sql(query, con=engine)
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 print("=" * 60)
 print("1. 데이터 기본 정보")
 print("=" * 60)
@@ -121,7 +147,11 @@ ax.bar(addon_churn.index, addon_churn.values * 100, color='#8BC34A')
 ax.set_title('부가서비스 수별 이탈률', fontweight='bold')
 
 plt.tight_layout()
+<<<<<<< HEAD
 plt.savefig(os.path.join(BASE_DIR, 'assets', 'eda_overview.png'))
+=======
+plt.savefig('C:/project_file/churn_project_ott_v2/churn_project/assets/eda_overview.png')
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 plt.close()
 
 # ─── 5. 상관관계 히트맵 ──────────────────────────────────────────────────────
@@ -130,7 +160,11 @@ numeric_df = df.select_dtypes(include=[np.number])
 corr_df = numeric_df.corr()
 fig, ax = plt.subplots(figsize=(12, 10))
 sns.heatmap(corr_df, annot=True, fmt='.2f', cmap='coolwarm', ax=ax)
+<<<<<<< HEAD
 plt.savefig(os.path.join(BASE_DIR, 'assets', 'correlation_heatmap.png'))
+=======
+plt.savefig('C:/project_file/churn_project_ott_v2/churn_project/assets/correlation_heatmap.png')
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 plt.close()
 
 # ─── 6. 인코딩 및 스케일링 ────────────────────────────────────────────────────
@@ -144,7 +178,11 @@ for col in cat_cols:
     df_model[col] = le.fit_transform(df_model[col])
     le_dict[col] = le
 
+<<<<<<< HEAD
 joblib.dump(le_dict, os.path.join(BASE_DIR, 'models', 'label_encoders.pkl'))
+=======
+joblib.dump(le_dict, 'C:/project_file/churn_project_ott_v2/churn_project/models/label_encoders.pkl')
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 
 feature_cols = [c for c in df_model.columns if c != '이탈여부']
 X = df_model[feature_cols]
@@ -154,6 +192,7 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 X_scaled = pd.DataFrame(X_scaled, columns=feature_cols)
 
+<<<<<<< HEAD
 joblib.dump(scaler, os.path.join(BASE_DIR, 'models', 'scaler.pkl'))
 joblib.dump(feature_cols, os.path.join(BASE_DIR, 'models', 'feature_cols.pkl'))
 
@@ -161,4 +200,13 @@ X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, 
 joblib.dump((X_train, X_test, y_train, y_test), os.path.join(BASE_DIR, 'models', 'train_test_split.pkl'))
 
 df_model.to_csv(os.path.join(BASE_DIR, 'data', 'processed_data.csv'), index=False, encoding='utf-8-sig')
+=======
+joblib.dump(scaler, 'C:/project_file/churn_project_ott_v2/churn_project/models/scaler.pkl')
+joblib.dump(feature_cols, 'C:/project_file/churn_project_ott_v2/churn_project/models/feature_cols.pkl')
+
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y)
+joblib.dump((X_train, X_test, y_train, y_test), 'C:/project_file/churn_project_ott_v2/churn_project/models/train_test_split.pkl')
+
+df_model.to_csv('C:/project_file/churn_project_ott_v2/churn_project/data/processed_data.csv', index=False, encoding='utf-8-sig')
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 print("전처리 및 EDA 완료")

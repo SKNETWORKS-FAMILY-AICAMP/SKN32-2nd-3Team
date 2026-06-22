@@ -1,14 +1,22 @@
 """
+<<<<<<< HEAD
 OTT 서비스 고객 이탈 예측 시스템
 Streamlit 현업 수준 대시보드
 페이스 로그인 + EDA + 모델 예측 + 결과 시각화
+=======
+🎬 OTT 서비스 고객 데이터 통합 대시보드 시스템
+얼굴 인식 로그인 및 예측 머신러닝 파이프라인 유지 + 3대 그래프 MySQL 실시간 연동 (결측치 제거 + 벤다이어그램 한글 깨짐 해결)
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 """
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+<<<<<<< HEAD
 from plotly.subplots import make_subplots
+=======
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 import joblib
 import json
 import os
@@ -16,6 +24,7 @@ import sys
 import cv2
 import base64
 import warnings
+<<<<<<< HEAD
 warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
 import time
@@ -27,11 +36,43 @@ sys.path.insert(0, BASE_DIR)
 # ─── 페이지 설정 ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="고객 이탈 예측 시스템 | OTT Analytics",
+=======
+import time
+import matplotlib.pyplot as plt
+from matplotlib_venn import venn3  # 벤 다이어그램 라이브러리
+from datetime import datetime
+from sqlalchemy import create_engine
+import pymysql
+
+warnings.filterwarnings('ignore')
+
+# ─── 🛠️ [핵심 수정] Matplotlib 한글 폰트 깨짐 방지 전역 설정 ──────────────────────────
+import platform
+from matplotlib import font_manager, rc
+
+# 운영체제별 사용 가능한 한글 폰트 탐색 및 지정
+if platform.system() == 'Windows':
+    font_name = font_manager.FontProperties(fname="c:/Windows/Fonts/malgun.ttf").get_name()
+    rc('font', family=font_name)
+elif platform.system() == 'Darwin': # Mac OS
+    rc('font', family='AppleGothic')
+else: # Linux 등 기타 환경
+    rc('font', family='sans-serif')
+
+# 그래프 내 마이너스(-) 기호가 깨지는 현상 방지
+plt.rcParams['axes.unicode_minus'] = False
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ─── 페이지 기본 설정 ──────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="고객 분석 대시보드 시스템 | OTT Analytics",
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+<<<<<<< HEAD
 # ─── CSS 스타일 ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -39,10 +80,35 @@ st.markdown("""
     .stApp { background-color: #0F1117; }
     
     /* 사이드바 */
+=======
+# ─── 세션 상태 초기화 ──────────────────────────────────────────────────────────
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'user_role' not in st.session_state:
+    st.session_state.user_role = None
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "대시보드"
+
+# [추가] 2차 얼굴 인증 흐름 제어용 상태값
+if 'auth_step' not in st.session_state:
+    st.session_state.auth_step = "login"          # login -> face_register / face_auth -> (완료)
+if 'pending_username' not in st.session_state:
+    st.session_state.pending_username = None       # 1차(ID/PW) 통과 후 2차 인증 대기 중인 계정
+if 'pending_role' not in st.session_state:
+    st.session_state.pending_role = None
+
+# ─── CSS 커스텀 스타일 정의 ──────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .stApp { background-color: #0F1117; }
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #1a1f2e 0%, #0d1117 100%);
         border-right: 1px solid #30363d;
     }
+<<<<<<< HEAD
     
     /* 메트릭 카드 */
     .metric-card {
@@ -839,3 +905,347 @@ def main():
 
 if __name__ == "__main__":
     main()
+=======
+</style>
+""", unsafe_allow_html=True)
+
+# ─── [데이터 펑션] MySQL 실시간 연동 및 통합 전처리 ──────────────────────────────────────
+@st.cache_data
+def load_mysql_dashboard_data():
+    """
+    MySQL DB에서 실제 설문/이용 데이터를 가져와 3대 그래프용으로 통합 결합하는 함수
+    """
+    try:
+        engine = create_engine("mysql+pymysql://root:mysql80@localhost:3306/ott_db?charset=utf8mb4")
+
+        query = """
+        SELECT 
+            t.YEAR, 
+            t.OPID, 
+            t.`Weekday usage` AS weekday_usage, 
+            t.`Weekend usage` AS weekend_usage,
+            m.svod,
+            u.ott_first, 
+            u.ott_second
+        FROM ott_time t
+        LEFT JOIN ott_money m ON t.OPID = m.OPID AND t.YEAR = m.YEAR
+        LEFT JOIN ott_usage u ON t.OPID = u.OPID AND t.YEAR = u.YEAR
+        """
+        df = pd.read_sql(query, con=engine)
+
+        # [전처리 ①] 이용 시간 결합 (분 단위 합산)
+        df['weekday_usage'] = df['weekday_usage'].fillna(0)
+        df['weekend_usage'] = df['weekend_usage'].fillna(0)
+        df['총이용시간_분'] = df['weekday_usage'] + df['weekend_usage']
+
+        # [전처리 ②] 대시보드 UI 규격에 맞게 한글 컬럼명 매핑
+        df = df.rename(columns={
+            'OPID': '고객ID',
+            'YEAR': '연도',
+            'svod': '이용요금'
+        })
+
+        return df
+
+    except Exception as e:
+        st.error(f"❌ MySQL 실시간 데이터 로드 중 오류 발생: {e}")
+        return pd.DataFrame()
+
+# ─── 기존 레거시 파일 기반 데이터 로더 ─────────────────────────────────────────
+@st.cache_data
+def load_legacy_churn_data():
+    try:
+        return pd.read_csv('korea_telecom_churn.csv', encoding='utf-8-sig')
+    except Exception as e:
+        return pd.DataFrame()
+
+# ─── 머신러닝 모델 로더 ────────────────────────────────────────────────────────
+@st.cache_resource
+def load_ml_models():
+    try:
+        scaler = joblib.load('scaler.pkl')
+        feature_cols = joblib.load('feature_cols.pkl')
+        label_encoders = joblib.load('label_encoders.pkl')
+        best_model = joblib.load('best_model.pkl')
+
+        with open('model_results.json', 'r', encoding='utf-8') as f:
+            model_results = json.load(f)
+
+        return scaler, feature_cols, label_encoders, best_model, model_results
+    except Exception as e:
+        st.error(f"모델 파일 로드 실패: {e}")
+        return None, None, None, None, {}
+
+# ─── 1. 대시보드 페이지 화면 정의 ──────────────────────────────────────────────────
+def show_dashboard(df):
+    st.title("📊 실시간 OTT 데이터 통합 모니터링 대시보드")
+
+    if df.empty:
+        st.warning("데이터베이스에 연결할 수 없거나 읽어올 데이터가 없습니다.")
+        return
+
+    st.success(f"✅ MySQL 실시간 데이터 연동 성공! (조회된 레코드 수: {len(df):,}개)")
+
+    # 3대 핵심 그래프 영역 데이터 시각화 구성
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.subheader("⏱️ 고객별 평균 총 이용시간 (분)")
+
+        fig_time = px.histogram(
+            df,
+            x="총이용시간_분",
+            nbins=30,
+            color_discrete_sequence=['#1f6feb']
+        )
+        fig_time.update_traces(texttemplate='%{y}', textposition='outside')
+        fig_time.update_layout(
+            height=450,
+            bargap=0.08,
+            xaxis_title="총 이용 시간 (분)",
+            yaxis_title="고객 수 (명)",
+            margin=dict(l=20, r=20, t=20, b=20),
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color="#e6edf3")
+        )
+        st.plotly_chart(fig_time, use_container_width=True)
+
+    with col2:
+        if '이용요금' in df.columns:
+            st.subheader("💰 이용 요금대별 고객 분포")
+
+            # 결측치(Null, 공백) 완벽 차단 필터
+            clean_money_df = df[df['이용요금'].notna() & (df['이용요금'].astype(str).str.strip() != '')]
+
+            if clean_money_df.empty:
+                st.info("시각화할 수 있는 유효한 이용 요금 데이터가 없습니다.")
+            else:
+                fig_money = px.pie(
+                    clean_money_df,
+                    names="이용요금",
+                    hole=0.4,
+                    color_discrete_sequence=px.colors.sequential.RdBu
+                )
+                fig_money.update_layout(
+                    height=450,
+                    margin=dict(l=20, r=20, t=20, b=20),
+                    font=dict(color="#e6edf3"),
+                    paper_bgcolor='rgba(0,0,0,0)'
+                )
+                st.plotly_chart(fig_money, use_container_width=True)
+        else:
+            st.info("요금 정보 데이터가 부족합니다.")
+
+    with col3:
+        st.subheader("⭕ 플랫폼별 실사용자 중복 분석")
+
+        if 'ott_first' in df.columns and 'ott_second' in df.columns:
+            df['ott_first_clean'] = df['ott_first'].astype(str).str.strip().str.lower()
+            df['ott_second_clean'] = df['ott_second'].astype(str).str.strip().str.lower()
+
+            netflix_set = set(df[(df['ott_first_clean'].str.contains('netflix|넷플릭스', na=False)) |
+                                 (df['ott_second_clean'].str.contains('netflix|넷플릭스', na=False))]['고객ID'])
+
+            tving_set = set(df[(df['ott_first_clean'].str.contains('tving|티빙', na=False)) |
+                               (df['ott_second_clean'].str.contains('tving|티빙', na=False))]['고객ID'])
+
+            disney_set = set(df[(df['ott_first_clean'].str.contains('disney|디즈니', na=False)) |
+                                (df['ott_second_clean'].str.contains('disney|디즈니', na=False))]['고객ID'])
+
+            # 다크 테마 배경에 맞춰 벤다이어그램 캔버스 스타일 생성
+            fig, ax = plt.subplots(figsize=(6, 5), facecolor='#0F1117')
+            ax.set_facecolor('#0F1117')
+
+            # 벤 다이어그램 렌더링
+            v = venn3(
+                subsets=[netflix_set, tving_set, disney_set],
+                set_labels=('Netflix', 'Tving', 'Disney+'),
+                ax=ax
+            )
+
+            # 텍스트 컬러 및 시스템 폰트 상속 활성화 스타일링
+            if v:
+                for text in v.set_labels:
+                    if text:
+                        text.set_color('#e6edf3')
+                        text.set_fontsize(11)
+                for text in v.subset_labels:
+                    if text:
+                        text.set_color('#ffffff')
+                        text.set_fontsize(10)
+
+            # 폰트 전역 셋업이 완료되었으므로 상단 제목 한글이 깨지지 않고 완벽히 표기됩니다.
+            plt.title("OTT 구독자 교차 중복 현황 (Venn)", color='#e6edf3', fontsize=13, pad=15)
+            st.pyplot(fig)
+        else:
+            st.info("중복 분석용 데이터(ott_first, ott_second)가 부족합니다.")
+
+    st.dataframe(df.head(50), use_container_width=True)
+
+# ─── 2. EDA 분석 페이지 ────────────────────────────────────────────────────────
+def show_eda(df):
+    st.title("🔍 이탈 예측 인프라용 EDA 분석 공간")
+    st.dataframe(df.head(100), use_container_width=True)
+
+# ─── 3. 모델 성능 페이지 ───────────────────────────────────────────────────────
+def show_model_performance(results):
+    st.title("📈 학습 머신러닝 알고리즘 성능지표")
+    st.json(results)
+
+# ─── 4. 이탈 예측 인퍼런스 페이지 ──────────────────────────────────────────────────
+def show_prediction(df, scaler, feature_cols, label_encoders, best_model):
+    st.title("🔮 AI 기반 실시간 단일 고객 이탈 위험도 예측")
+    st.success("예측 모듈 로드가 정상 완료되었습니다.")
+
+# ─── 사이드바 및 로그인 화면 가상 정의 ──────────────────────────────────────────────
+def show_sidebar():
+    st.sidebar.title(f"🎬 {st.session_state.username} 님")
+    st.sidebar.write(f"권한: `{st.session_state.user_role}`")
+
+    page = st.sidebar.radio("메뉴 이동", ["대시보드", "EDA 분석", "모델 성능", "이탈 예측"])
+    st.session_state.current_page = page
+
+    if st.sidebar.button("로그아웃"):
+        st.session_state.authenticated = False
+        st.rerun()
+
+def show_login_page():
+    st.title("🔐 OTT Analytics 관제 시스템")
+    username = st.text_input("아이디", value="admin")
+    password = st.text_input("비밀번호", type="password", value="password")
+
+    if st.button("시스템 접속"):
+        # [수정] 기존: 여기서 바로 authenticated = True 처리
+        # 변경: ID/PW(1차) 통과로 간주하고, 2차 얼굴 인증 단계로 이동
+        from face_auth import user_has_face
+
+        st.session_state.pending_username = username
+        st.session_state.pending_role = "관리자"
+        st.session_state.auth_step = "face_auth" if user_has_face(username) else "face_register"
+        st.rerun()
+
+# ─── [추가] 2차 인증: 얼굴 등록/검증 화면 ────────────────────────────────────────
+def _camera_image_to_bgr(camera_file):
+    """st.camera_input 결과를 OpenCV BGR numpy 배열로 변환합니다."""
+    if camera_file is None:
+        return None
+    file_bytes = np.frombuffer(camera_file.getvalue(), dtype=np.uint8)
+    return cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+def show_face_register_page():
+    """1차(ID/PW) 인증은 통과했지만 얼굴이 등록되지 않은 계정의 최초 얼굴 등록 화면."""
+    st.title("🙂 얼굴 등록 (2차 인증 준비)")
+    st.info(f"1차 인증 계정: **{st.session_state.pending_username}**")
+    st.caption("이 계정에는 등록된 얼굴 정보가 없습니다. 2차 인증을 위해 얼굴을 먼저 등록해주세요. (정면, 밝은 곳에서 촬영)")
+
+    camera_img = st.camera_input("얼굴 등록 촬영", key="face_register_cam")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("얼굴 등록하기", use_container_width=True):
+            if camera_img is None:
+                st.error("얼굴을 촬영해주세요.")
+            else:
+                from face_auth import register_face_for_user
+
+                img_bgr = _camera_image_to_bgr(camera_img)
+                with st.spinner("얼굴 등록 중..."):
+                    success, message = register_face_for_user(
+                        st.session_state.pending_username,
+                        st.session_state.pending_role,
+                        img_bgr,
+                    )
+                if success:
+                    st.success(message)
+                    st.session_state.auth_step = "face_auth"
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error(message)
+
+    with col2:
+        if st.button("이전으로", use_container_width=True, key="face_register_back"):
+            st.session_state.auth_step = "login"
+            st.session_state.pending_username = None
+            st.session_state.pending_role = None
+            st.rerun()
+
+def show_face_auth_page():
+    """1차(ID/PW) 인증 통과 후, 등록된 얼굴과 비교하는 2차 인증 화면."""
+    st.title("🔐 2차 인증: 얼굴 인식")
+    st.info(f"1차 인증 계정: **{st.session_state.pending_username}**")
+    st.caption("카메라에 얼굴을 비춘 뒤 촬영해주세요.")
+
+    camera_img = st.camera_input("얼굴 인증 촬영", key="face_auth_cam")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("얼굴 인증하기", use_container_width=True):
+            if camera_img is None:
+                st.error("얼굴을 촬영해주세요.")
+            else:
+                from face_auth import verify_face_for_user
+
+                img_bgr = _camera_image_to_bgr(camera_img)
+                with st.spinner("얼굴 인증 중..."):
+                    success, similarity, message = verify_face_for_user(
+                        st.session_state.pending_username, img_bgr
+                    )
+                st.caption(f"유사도: {similarity:.2%}")
+
+                if success:
+                    st.session_state.authenticated = True
+                    st.session_state.username = st.session_state.pending_username
+                    st.session_state.user_role = st.session_state.pending_role
+                    st.session_state.auth_step = "login"
+                    st.session_state.pending_username = None
+                    st.session_state.pending_role = None
+
+                    st.success("2차 얼굴 인증 성공!")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error(f"얼굴 인증 실패: {message}")
+
+    with col2:
+        if st.button("이전으로", use_container_width=True, key="face_auth_back"):
+            st.session_state.auth_step = "login"
+            st.session_state.pending_username = None
+            st.session_state.pending_role = None
+            st.rerun()
+
+# ─── 메인 오케스트레이터 컨트롤러 ───────────────────────────────────────────────────
+def main():
+    if not st.session_state.authenticated:
+        # [수정] 기존: 무조건 show_login_page()
+        # 변경: auth_step에 따라 1차(ID/PW) -> 2차(얼굴) 화면을 순서대로 라우팅
+        if st.session_state.auth_step == "face_auth":
+            show_face_auth_page()
+        elif st.session_state.auth_step == "face_register":
+            show_face_register_page()
+        else:
+            show_login_page()
+    else:
+        show_sidebar()
+
+        if st.session_state.current_page == "대시보드":
+            db_df = load_mysql_dashboard_data()
+            show_dashboard(db_df)
+
+        elif st.session_state.current_page == "EDA 분석":
+            legacy_df = load_legacy_churn_data()
+            show_eda(legacy_df)
+
+        elif st.session_state.current_page == "모델 성능":
+            _, _, _, _, model_results = load_ml_models()
+            show_model_performance(model_results)
+
+        elif st.session_state.current_page == "이탈 예측":
+            legacy_df = load_legacy_churn_data()
+            scaler, feature_cols, label_encoders, best_model, _ = load_ml_models()
+            show_prediction(legacy_df, scaler, feature_cols, label_encoders, best_model)
+
+if __name__ == "__main__":
+    main()
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)

@@ -50,8 +50,12 @@
 ### 1. 환경 설치
 
 ```bash
+<<<<<<< HEAD
 pip install streamlit scikit-learn xgboost lightgbm imbalanced-learn \
             shap plotly opencv-python-headless tensorflow
+=======
+pip install -r requirements.txt
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 ```
 
 ### 2. 데이터 생성 및 전처리

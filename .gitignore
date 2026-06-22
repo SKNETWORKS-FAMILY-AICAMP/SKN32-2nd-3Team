@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # =========================
 
 # Python
@@ -5,10 +6,15 @@
 # =========================
 
 **pycache**/
+=======
+# Byte-compiled / optimized / DLL files
+__pycache__/
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 *.py[cod]
 *$py.class
 
 # C extensions
+<<<<<<< HEAD
 
 *.so
 
@@ -16,6 +22,14 @@
 
 .Python
 build/
+=======
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 dist/
 downloads/
 eggs/
@@ -26,10 +40,15 @@ parts/
 sdist/
 var/
 wheels/
+<<<<<<< HEAD
+=======
+share/python-wheels/
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 *.egg-info/
 .installed.cfg
 *.egg
 
+<<<<<<< HEAD
 # =========================
 
 # Virtual Environment
@@ -161,3 +180,39 @@ desktop.ini
 *.bak
 *.swp
 *~
+=======
+# Virtual Environment (가상환경)
+.venv/
+venv/
+ENV/
+env/
+
+# IDEs and Editors (PyCharm, VS Code 등)
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Project Specific Data & Models (용량이 크거나 개인정보가 포함된 데이터)
+data/
+face_data/
+models/
+
+# Database (로컬 SQL 덤프 파일)
+*.sql
+ott_db.sql
+
+# Streamlit 특정 설정 (보안 및 자격증명 파일 제외)
+.streamlit/secrets.toml
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)

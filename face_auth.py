@@ -13,10 +13,17 @@ from pathlib import Path
 from datetime import datetime
 import pickle
 
+<<<<<<< HEAD
 # Get project root directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FACE_DB_PATH = os.path.join(BASE_DIR, 'face_data')
 USER_DB_PATH = os.path.join(BASE_DIR, 'face_data', 'users.json')
+=======
+# [수정] 특정 PC 경로(C:/project_file/...)에 고정되어 있던 부분을
+# 이 파일이 위치한 폴더 기준 상대 경로로 변경 (다른 PC/서버에서도 동작하도록)
+FACE_DB_PATH = str(Path(__file__).resolve().parent / "face_data")
+USER_DB_PATH = str(Path(FACE_DB_PATH) / "users.json")
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 os.makedirs(FACE_DB_PATH, exist_ok=True)
 
 # ─── 사용자 DB 관리 ───────────────────────────────────────────────────────────
@@ -250,6 +257,90 @@ def get_all_users():
     db = load_user_db()
     return db
 
+<<<<<<< HEAD
+=======
+# ─── [추가] ID/PW 2차 인증(특정 계정 1:1 검증)용 함수 ────────────────────────────
+def user_has_face(username):
+    """해당 계정에 '실제로 촬영된' 얼굴이 등록되어 있는지 확인합니다.
+    데모 계정(is_demo=True)은 가짜(랜덤) 임베딩이라 실제 얼굴 등록 전 상태로 간주합니다."""
+    db = load_user_db()
+    user = db.get(username)
+    if not user:
+        return False
+    if user.get('is_demo'):
+        return False
+    emb_path = user.get('embedding_path', '')
+    return bool(emb_path) and os.path.exists(emb_path)
+
+def register_face_for_user(username, role, image_array):
+    """ID/PW 1차 인증을 통과한 계정에 얼굴을 (최초 등록 또는 재등록) 합니다.
+    기존 register_user()와 달리 이미 존재하는 계정이어도 덮어쓸 수 있습니다(데모 계정 → 실제 얼굴 전환용)."""
+    faces, gray = detect_face_opencv(image_array)
+    if len(faces) == 0:
+        return False, "얼굴을 감지할 수 없습니다. 정면을 향해 다시 시도해 주세요."
+    if len(faces) > 1:
+        return False, "여러 얼굴이 감지되었습니다. 한 명만 나오도록 해주세요."
+
+    face_img = extract_face_region(image_array, faces)
+    embedding = compute_face_embedding(face_img)
+
+    face_path = os.path.join(FACE_DB_PATH, f"{username}_face.jpg")
+    cv2.imwrite(face_path, face_img)
+
+    emb_path = os.path.join(FACE_DB_PATH, f"{username}_embedding.pkl")
+    with open(emb_path, 'wb') as f:
+        pickle.dump(embedding, f)
+
+    db = load_user_db()
+    prev_login_count = db.get(username, {}).get('login_count', 0)
+    db[username] = {
+        'username': username,
+        'role': role,
+        'face_path': face_path,
+        'embedding_path': emb_path,
+        'registered_at': datetime.now().isoformat(),
+        'last_login': None,
+        'login_count': prev_login_count,
+        'is_demo': False
+    }
+    save_user_db(db)
+    return True, f"'{username}' 얼굴 등록 완료!"
+
+def verify_face_for_user(username, image_array, threshold=0.65):
+    """특정 계정(username)에 등록된 얼굴과 1:1로만 비교합니다(2차 인증용).
+    Returns:
+        (success, similarity, message)
+    """
+    db = load_user_db()
+    user = db.get(username)
+    emb_path = user.get('embedding_path', '') if user else ''
+
+    if not user or not emb_path or not os.path.exists(emb_path):
+        return False, 0.0, "등록된 얼굴 정보가 없습니다. 얼굴 등록을 먼저 진행하세요."
+
+    faces, gray = detect_face_opencv(image_array)
+    if len(faces) == 0:
+        return False, 0.0, "얼굴을 감지할 수 없습니다."
+    if len(faces) > 1:
+        return False, 0.0, "여러 얼굴이 감지되었습니다. 한 명만 나오도록 해주세요."
+
+    face_img = extract_face_region(image_array, faces)
+    input_embedding = compute_face_embedding(face_img)
+
+    with open(emb_path, 'rb') as f:
+        stored_embedding = pickle.load(f)
+
+    similarity = cosine_similarity(input_embedding, stored_embedding)
+
+    if similarity >= threshold:
+        db[username]['last_login'] = datetime.now().isoformat()
+        db[username]['login_count'] = db[username].get('login_count', 0) + 1
+        save_user_db(db)
+        return True, similarity, "얼굴 인증 성공!"
+    else:
+        return False, similarity, f"얼굴 불일치 (유사도: {similarity:.2%})"
+
+>>>>>>> 74d49c4 (feat: 로컬 프로젝트 초기 커밋)
 def delete_user(username):
     """사용자 삭제"""
     db = load_user_db()
