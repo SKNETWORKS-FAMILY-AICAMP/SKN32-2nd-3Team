@@ -1,0 +1,16 @@
+streamlit
+scikit-learn
+xgboost
+lightgbm
+imbalanced-learn
+shap
+plotly
+opencv-python-headless
+tensorflow
+sqlalchemy
+PyMySQL
+matplotlib-venn
+insightface
+onnxruntime
+cryptography
+python-dotenv

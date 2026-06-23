@@ -1,0 +1,148 @@
+# ===================================
+# Python
+# ===================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ===================================
+# 가상환경 (Virtual Environment)
+# ===================================
+.venv/
+venv/
+env/
+ENV/
+
+# ===================================
+# IDE / 에디터
+# ===================================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ===================================
+# Jupyter Notebook
+# ===================================
+.ipynb_checkpoints/
+
+# ===================================
+# 로그
+# ===================================
+logs/
+*.log
+
+# ===================================
+# 환경변수 / 시크릿 (절대 커밋 금지)
+# db.py가 .env에서 MYSQL_USER/PASSWORD, FACE_EMBEDDING_KEY 로드
+# ===================================
+.env
+.env.*
+.streamlit/secrets.toml
+
+# ===================================
+# 데이터베이스
+# ott_db.sql 은 스키마/적재 스크립트(셋업용)라 추적 유지함
+# 실제 로컬 덤프 파일만 패턴으로 제외
+# ===================================
+*.db
+*.sqlite
+*.sqlite3
+*_dump.sql
+dump_*.sql
+backup*.sql
+
+# ===================================
+# 머신러닝 / 딥러닝 모델 산출물
+# train_models.py 로 재생성 가능 (용량 큼)
+# ===================================
+models/
+checkpoints/
+weights/
+artifacts/
+*.h5
+*.keras
+*.pkl
+*.joblib
+*.onnx
+
+# ===================================
+# TensorFlow
+# ===================================
+events.out.tfevents.*
+tensorboard_logs/
+
+# ===================================
+# 데이터 (재생성 가능 / 용량 큼)
+# generate_data.py, preprocess_eda.py 로 생성
+# ===================================
+data/
+
+# ===================================
+# 얼굴 인식 데이터 (생체정보·개인정보 - 절대 커밋 금지)
+# ===================================
+face_data/
+captured_faces/
+face_dataset/
+temp_images/
+
+# ===================================
+# 캐시
+# ===================================
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# ===================================
+# OS
+# ===================================
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+
+# ===================================
+# 임시 파일
+# ===================================
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# ===================================
+# 빈 폴더 구조 유지용 예외
+# (data/, models/, face_data/ 는 통째로 무시되지만
+#  .gitkeep 파일만은 추적해서 클론 시 폴더가 생성되게 함)
+# ===================================
+!data/.gitkeep
+!data/before/.gitkeep
+!data/xlsx/.gitkeep
+!models/.gitkeep
+!face_data/.gitkeep
