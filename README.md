@@ -23,7 +23,7 @@
 이를 해결하기 위해 저희는 고객 데이터를 분석하여 이탈 가능성을 예측하고, 위험 고객을 사전에 관리할 수 있는 AI 기반 고객 이탈 예측 시스템인 S-Board를 개발하였습니다.
 
 ### 프로젝트 목표
-<img src="images\pr_goal.png">
+<img src="data\pr_goal.png">
 
 ### 기능요약
 가입 고객 이탈 예측 AI 시스템은 관리자 계정 및 얼굴 인증 로그인을 통해 안전한 접근 환경을 제공한다.
@@ -67,7 +67,7 @@ churn_project_ott/
 > [!NOTE]
 > 사용자 얼굴 인증부터 데이터 분석, ML 모델 서빙까지의 전체 파이프라인입니다.
 
-<img src="images\faceID.png">
+<img src="data\faceID.png">
 
 ---
 
@@ -107,11 +107,11 @@ churn_project_ott/
 
 ## 수행 결과
 ### 1) 메인 페이지 - 
-<img src="images\face_login.png">
-<img src="images\dashboard.png">
-<img src="images\EDA.png">
-<img src="images\model.png">
-<img src="images\churn.png">
+<img src="data\face_login.png">
+<img src="data\dashboard.png">
+<img src="data\EDA.png">
+<img src="data\model.png">
+<img src="data\churn.png">
 
 ---
 
