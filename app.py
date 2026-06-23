@@ -4,7 +4,7 @@
 """
 import streamlit as st
 import pandas as pd
-import numpy as np
+import numpy as np 
 import plotly.express as px
 import plotly.graph_objects as go
 import json
@@ -89,7 +89,7 @@ MENU_BY_SERVICE = {
 
 # ─── CSS 커스텀 스타일 정의 (디자인 요소는 ui_styles.py로 분리) ───────────────────────────
 from ui_styles import (
-    GLOBAL_CSS, LOGIN_PAGE_CSS, logo_data_uri, logo_img_html,
+    GLOBAL_CSS, get_login_page_css, logo_data_uri, bg_image_data_uri, logo_img_html,
     login_left_title_html, login_left_subtitle_html,
     login_right_title_html, login_right_subtitle_html,
 )
@@ -1402,77 +1402,103 @@ def show_login_page():
     로그인 후 실제 권한/메뉴는 인증된 계정의 DB role(ROLE_META)로 결정됩니다."""
 
     logo_uri = logo_data_uri(BASE_DIR)
+    bg_uri = bg_image_data_uri(BASE_DIR)
 
-    st.html(LOGIN_PAGE_CSS)
+    st.html(get_login_page_css(bg_uri))
 
-    with st.container(key="login_shell"):
-        left, right = st.columns([1, 1])
+    col1, col2, col3 = st.columns([1,2,1])
 
-        with left:
-            if logo_uri:
-                st.html(logo_img_html(logo_uri))
+    with col2:
+            
+        with st.container(key="login_shell"):
+            # 모든 요소를 하나의 컨테이너로 묶음
 
-            st.html(login_left_title_html("어떤 OTT 관리자이신가요?"))
-            st.html(login_left_subtitle_html("관리할 플랫폼을 선택해주세요"))
 
-            # 체크박스 세로 일렬 배치 (디자인 가이드: 수직 스택)
-            for key, label in _SERVICE_CHOICES:
-                st.checkbox(
-                    label,
-                    key=f"svc_box_{key}",
-                    on_change=_on_service_box_change,
-                    args=(key,),
-                )
+            # st.markdown("""
+            # <style>
+            # .login-wrap {
+            #     width: 500px;
+            #     margin: 0 auto;   /* 가운데 정렬 */
+            # }
+            # </style>
+            # """, unsafe_allow_html=True)
 
-            selected_count = sum(st.session_state.get(f"svc_box_{key}", False) for key, _ in _SERVICE_CHOICES)
-            can_login = selected_count == 1
+            # st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
+            with st.container():
+                # 로고
+                if logo_uri:
+                    st.html(logo_img_html(logo_uri))
 
-        with right:
-            st.html(login_right_title_html("🔐 OTT Analytics 관제 시스템"))
-            st.html(login_right_subtitle_html("관리자 계정으로 로그인하세요"))
+                # 타이틀
+                st.html('<div class="login-title">어떤 OTT 관리자이신가요?</div>')
 
-            with st.form("login_form"):
-                username = st.text_input("아이디", placeholder="아이디를 입력하세요", icon="📧")
-                password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요", icon="🔒")
-                submit = st.form_submit_button(
-                    "로그인", use_container_width=True, disabled=not can_login
-                )
+                # 체크박스 가로 나열
+                cols = st.columns(len(_SERVICE_CHOICES))
+                for idx, (key, label) in enumerate(_SERVICE_CHOICES):
+                    with cols[idx]:
+                        st.checkbox(
+                            label,
+                            key=f"svc_box_{key}",
+                            on_change=_on_service_box_change,
+                            args=(key,),
+                        )
+
+                selected_count = sum(st.session_state.get(f"svc_box_{key}", False) for key, _ in _SERVICE_CHOICES)
+                can_login = selected_count == 1
+
+                st.markdown("""
+                <style>
+                section.main > div {
+                    max-width: 500px;
+                    margin: 0 auto;
+                }
+                </style>
+                """, unsafe_allow_html=True)
+
+                # 로그인 폼 섹션 카드
+                with st.form("login_form"):
+                    username = st.text_input("아이디", placeholder="아이디를 입력하세요")
+                    password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
+                    submit = st.form_submit_button(
+                        "로그인", use_container_width=True, disabled=not can_login
+                    )
                 if not can_login:
-                    st.caption("⚠️ 왼쪽에서 관리할 OTT 분야를 하나 선택해주세요.")
+                    st.caption("⚠️ 관리할 OTT 분야를 하나 선택해주세요")
+            
 
-        if submit:
-            from db import verify_user_password, user_has_face, update_login_attempt, log_login_attempt
-            from face_auth import check_lock_status
+            if submit:
+                from db import verify_user_password, user_has_face, update_login_attempt, log_login_attempt
+                from face_auth import check_lock_status
 
-            is_locked, lock_message = check_lock_status(username)
-            if is_locked:
-                st.error(lock_message)
-            else:
-                ok, user_name, role, message = verify_user_password(username, password)
-
-                if ok:
-                    update_login_attempt(username, success=True)
-                    log_login_attempt(username, user_name, success=True)
-
-                    st.session_state.pending_user = username
-                    st.session_state.pending_user_name = user_name
-                    st.session_state.pending_role = role
-                    st.session_state.auth_step = "face_auth" if user_has_face(username) else "face_register"
-
-                    st.success("1차 인증 성공")
-                    time.sleep(0.5)
-                    st.rerun()
+                is_locked, lock_message = check_lock_status(username)
+                if is_locked:
+                    st.error(lock_message)
                 else:
-                    update_login_attempt(username, success=False)
-                    log_login_attempt(username, None, success=False)
+                    ok, user_name, role, message = verify_user_password(username, password)
 
-                    from db import get_user_lock_info
-                    lock_info = get_user_lock_info(username)
-                    if lock_info:
-                        remaining = max(0, 5 - (lock_info["fail_count"] or 0))
-                        st.error(f"{message} (남은 시도: {remaining}회)")
+                    if ok:
+                        update_login_attempt(username, success=True)
+                        log_login_attempt(username, user_name, success=True)
+
+                        st.session_state.pending_user = username
+                        st.session_state.pending_user_name = user_name
+                        st.session_state.pending_role = role
+                        st.session_state.auth_step = "face_auth" if user_has_face(username) else "face_register"
+
+                        st.success("1차 인증 성공")
+                        time.sleep(0.5)
+                        st.rerun()
                     else:
-                        st.error(message)
+                        update_login_attempt(username, success=False)
+                        log_login_attempt(username, None, success=False)
+
+                        from db import get_user_lock_info
+                        lock_info = get_user_lock_info(username)
+                        if lock_info:
+                            remaining = max(0, 5 - (lock_info["fail_count"] or 0))
+                            st.error(f"{message} (남은 시도: {remaining}회)")
+                        else:
+                            st.error(message)
 
 
 @st.dialog("🔐 얼굴 인증")
