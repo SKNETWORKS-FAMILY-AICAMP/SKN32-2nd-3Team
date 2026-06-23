@@ -514,24 +514,27 @@ def show_eda(df, viz_data):
 
     # ── Tab 1: 중요 변수 및 상관관계 ──
     with tab1:
-        st.subheader("🎯 머신러닝 모델이 주목한 핵심 특성 (Feature Importance)")
-        if viz_data and 'feature_importances' in viz_data:
-            fi_df = pd.DataFrame({
-                'Feature': list(viz_data['feature_importances'].keys()),
-                'Importance': list(viz_data['feature_importances'].values())
-            }).sort_values(by='Importance', ascending=True)
+        st.subheader("🏆 이탈률이 높은 고객 TOP 10")
 
-            fig_fi = px.bar(
-                fi_df, x='Importance', y='Feature', orientation='h',
-                title="이탈 예측 모델 변수 중요도 Top 10",
-                color='Importance', color_continuous_scale='Blues'
-            )
-            fig_fi.update_layout(height=400, paper_bgcolor='rgba(0,0,0,0)', font=dict(color="#1B2A41"))
-            st.plotly_chart(fig_fi, use_container_width=True)
+        # 정렬 기준 컬럼 설정 (우선순위: Churn_Probability -> Churn -> 이탈여부)
+        sort_col = None
+        for col in ['Churn_Probability', 'Churn', '이탈여부']:
+            if col in df.columns:
+                sort_col = col
+                break
+
+        if sort_col:
+            # 해당 컬럼 기준 내림차순 정렬 후 상위 10개 추출
+            top10_churn = df.sort_values(by=sort_col, ascending=False).head(10)
+
+            # 가독성을 위해 인덱스를 1부터 10까지 새로 지정하여 표 출력
+            top10_churn_display = top10_churn.copy()
+            top10_churn_display.index = range(1, 11)
+            st.dataframe(top10_churn_display, use_container_width=True)
         else:
-            st.info("모델 중요도 데이터(viz_data)를 불러올 수 없습니다.")
+            st.info("데이터셋에 이탈률을 정렬할 수 있는 컬럼('Churn_Probability', 'Churn', '이탈여부')이 존재하지 않습니다.")
 
-        # 상관관계 히트맵 (수치형 데이터 대상)
+        # 상관관계 히트맵 (수치형 데이터 대상 - 기존 코드 유지)
         st.subheader("🔗 수치형 변수 간 상관관계 분석 (Correlation Matrix)")
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         # 불필요한 ID성 컬럼 제외

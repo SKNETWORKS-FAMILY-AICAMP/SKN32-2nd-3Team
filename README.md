@@ -47,7 +47,6 @@
 
 churn_project_ott/
 ├── app.py                  # Streamlit 메인 앱
-├── pages/                  # 멀티페이지용
 ├── assets/                 # 로고/차트 이미지
 ├── data/                   # 데이터
 │   ├── before/, xlsx/      # 원본 CSV, 전처리 결과, 엑셀본

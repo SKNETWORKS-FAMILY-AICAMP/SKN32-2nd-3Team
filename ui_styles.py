@@ -285,12 +285,12 @@ def logo_data_uri(base_dir: str):
 
 
 def bg_image_data_uri(base_dir: str):
-    """assets/bg.jpg를 base64 data URI로 변환합니다 (없으면 None)."""
-    bg_path = os.path.join(base_dir, "assets", "bg1.jpg")
+    """assets/bg_wave.png를 base64 data URI로 변환합니다 (없으면 None)."""
+    bg_path = os.path.join(base_dir, "assets", "bg_wave.png")
     try:
         with open(bg_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode()
-        return f"data:image/jpeg;base64,{encoded}"
+        return f"data:image/png;base64,{encoded}"
     except FileNotFoundError:
         return None
 
